@@ -6,6 +6,7 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 
 class AppTest {
   @Test fun `health is up while Redis answers`() {
@@ -41,5 +42,56 @@ class AppTest {
     assertContains(response.headers().firstValue("Content-Type").get(), "text/html")
     assertContains(response.body(), "<p>Not Found</p>")
     assertContains(response.body(), "<p>404</p>")
+  }
+
+  @Test fun `signing in returns to the page it started from`() {
+    assertEquals("https://fov.ee/radio/catch-up?day=2026-10-21", signIn(MARI, "/radio/catch-up?day=2026-10-21").location)
+  }
+
+  @Test fun `signing in from no page, or from a page on another site, returns to the home page`() {
+    for (page in listOf(null, "//evil.example", "https://evil.example", "@evil.example"))
+      assertEquals("https://fov.ee", signIn(MARI, page).location, "from $page")
+  }
+
+  @Test fun `signing in starts a new session in a cookie for 30 days, sent only over HTTPS and hidden from scripts`() {
+    val signedIn = signIn(MARI)
+    assertNotEquals(signedIn.request().headers().firstValue("Cookie").get(), signedIn.cookie)
+    val cookie = signedIn.headers().allValues("Set-Cookie").single()
+    for (attribute in listOf("Max-Age=2592000", "Path=/", "HttpOnly", "Secure", "SameSite=None")) assertContains(cookie, "; $attribute")
+  }
+
+  @Test fun `an email not on the list is turned away without a session`() {
+    val response = signIn(JURI)
+    assertEquals(401, response.statusCode())
+    assertEquals(listOf("AUTHSESSION="), response.headers().allValues("Set-Cookie").map { it.substringBefore(";") }) // only expires the pending one
+  }
+
+  @Test fun `a sign-in cancelled at Google returns to the login page`() {
+    val start = startSignIn()
+    val response = get("${App.url}/login/oauth2/code/google?error=access_denied&state=${start.location.param("state")}", "Cookie", start.cookie)
+    assertEquals("/login?error", response.location)
+  }
+
+  @Test fun `a sign-in coming back with another state returns to the login page`() {
+    val start = startSignIn()
+    val code = atGoogle(start, MARI).param("code")
+    assertEquals("/login?error", get("${App.url}/login/oauth2/code/google?code=$code&state=forged", "Cookie", start.cookie).location)
+  }
+
+  @Test fun `a callback for a sign-in that didn't start here returns to the login page`() {
+    val code = atGoogle(startSignIn(), MARI).param("code")
+    assertEquals("/login?error", get("${App.url}/login/oauth2/code/google?code=$code").location)
+  }
+
+  @Test fun `a code Google turns down returns to the login page`() {
+    val start = startSignIn()
+    val response = get("${App.url}/login/oauth2/code/google?code=made-up&state=${start.location.param("state")}", "Cookie", start.cookie)
+    assertEquals("/login?error", response.location)
+  }
+
+  @Test fun `behind Caddy, Google sends the visitor back to the public site`() {
+    val caddy = arrayOf("X-Forwarded-Proto", "https", "X-Forwarded-Host", "fov.ee")
+    assertEquals("https://fov.ee/login/oauth2/code/google", startSignIn(null, *caddy).location.param("redirect_uri"))
+    assertEquals("https://fov.ee/radio", signIn(MARI, "/radio", *caddy).location)
   }
 }
