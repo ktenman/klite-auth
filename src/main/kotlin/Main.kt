@@ -32,9 +32,11 @@ import klite.warn
 import redis.clients.jedis.RedisClient
 import redis.clients.jedis.params.SetParams
 import java.net.URI
+import java.security.MessageDigest
 import java.security.SecureRandom
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.minutes
 
 private val clientId = Config["GOOGLE_CLIENT_ID"]
 private val clientSecret = Config["GOOGLE_CLIENT_SECRET"]
@@ -67,18 +69,21 @@ fun server(
 
       get("oauth2/authorization/google") {
         session["state"] = randomId()
-        session["page"] = query("redirect")?.takeIf { it.startsWith("/") && !it.startsWith("//") }
+        session["verifier"] = randomId()
+        session["page"] = query("redirect")?.takeIf { it.isPathOnThisSite() }
         redirect(URI(authorizationUri) + mapOf("client_id" to clientId, "redirect_uri" to callbackUrl(),
-          "response_type" to "code", "scope" to "email profile", "state" to session["state"]))
+          "response_type" to "code", "scope" to "email profile", "state" to session["state"],
+          "code_challenge" to session["verifier"]!!.sha256(), "code_challenge_method" to "S256"))
       }
 
       get("login/oauth2/code/google") {
         val state = session["state"]
+        val verifier = session["verifier"]
+        val code = query("code")
+        if (code == null || state == null || verifier == null || query("state") != state) redirect("/login?error")
         val page = session["page"]
         session.clear()
-        val code = query("code")
-        if (code == null || state == null || query("state") != state) redirect("/login?error")
-        val profile = runCatching { googleProfile(code) }.getOrElse { log.warn("Google sign-in failed: $it"); redirect("/login?error") }
+        val profile = runCatching { googleProfile(code, verifier) }.getOrElse { log.warn("Google sign-in failed: $it"); redirect("/login?error") }
         if (profile["email"] !in allowed) throw UnauthorizedException("Not allowed to sign in: ${profile["email"]}")
         for (key in listOf("email", "name", "given_name", "family_name", "picture")) session[key] = profile[key] as String?
         redirect(page?.let { redirectUrl.removeSuffix("/") + it } ?: redirectUrl)
@@ -109,8 +114,9 @@ fun server(
 private fun HttpExchange.signedIn() =
   session["email"] ?: redirect("/login" + header("X-Forwarded-Uri")?.let { "?redirect=" + it.urlEncode() }.orEmpty())
 
+private fun String.isPathOnThisSite() = length <= 2048 && startsWith("/") && !startsWith("//") && runCatching { URI(this) }.isSuccess
+
 private const val COOKIE = "AUTHSESSION"
-private val TTL = 30.days
 
 private class RedisSessions(private val redis: RedisClient) : SessionStore {
   override fun load(exchange: HttpExchange) = exchange.cookie(COOKIE)?.let { redis.get(key(it)) }
@@ -119,8 +125,15 @@ private class RedisSessions(private val redis: RedisClient) : SessionStore {
   override fun save(exchange: HttpExchange, session: Session) {
     if (!session.changed) return
     exchange.cookie(COOKIE)?.let { redis.del(key(it)) }
-    val id = if (session.params.isEmpty()) "" else randomId().also { redis.set(key(it), urlEncodeParams(session.params), SetParams().ex(TTL.inWholeSeconds)) }
-    exchange += Cookie(COOKIE, id, maxAge = if (id.isEmpty()) Duration.ZERO else TTL, httpOnly = true, secure = true, sameSite = SameSite.None)
+    val lifetime = session.lifetime()
+    val id = if (lifetime == Duration.ZERO) "" else randomId().also { redis.set(key(it), urlEncodeParams(session.params), SetParams().ex(lifetime.inWholeSeconds)) }
+    exchange += Cookie(COOKIE, id, maxAge = lifetime, httpOnly = true, secure = true, sameSite = SameSite.None)
+  }
+
+  private fun Session.lifetime() = when {
+    params.isEmpty() -> Duration.ZERO
+    this["email"] == null -> 10.minutes
+    else -> 30.days
   }
 
   private fun key(id: String) = "auth:session:$id"
@@ -129,9 +142,9 @@ private class RedisSessions(private val redis: RedisClient) : SessionStore {
 private val http by lazy { httpClient() }
 private val json = JsonMapper()
 
-private fun HttpExchange.googleProfile(code: String): Map<String, Any?> {
+private fun HttpExchange.googleProfile(code: String, verifier: String): Map<String, Any?> {
   val token = json.parse<Map<String, Any?>>(http.post(URI(tokenUri), urlEncodeParams("grant_type" to "authorization_code", "code" to code,
-    "redirect_uri" to callbackUrl(), "client_id" to clientId, "client_secret" to clientSecret)) { contentType(MimeTypes.wwwForm) }.bodyOrThrow())
+    "redirect_uri" to callbackUrl(), "client_id" to clientId, "client_secret" to clientSecret, "code_verifier" to verifier)) { contentType(MimeTypes.wwwForm) }.bodyOrThrow())
   return json.parse(http.get(URI(userInfoUri)) { authBearer("${token["access_token"]}") }.bodyOrThrow())
 }
 
@@ -139,6 +152,7 @@ private fun HttpExchange.callbackUrl() = fullUrl("/login/oauth2/code/google").to
 
 private val random = SecureRandom()
 private fun randomId() = ByteArray(32).also(random::nextBytes).base64UrlEncode()
+private fun String.sha256() = MessageDigest.getInstance("SHA-256").digest(toByteArray()).base64UrlEncode()
 
 private object ErrorPage : BodyRenderer {
   override val contentType = MimeTypes.html

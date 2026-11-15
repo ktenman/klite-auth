@@ -7,6 +7,8 @@ import klite.json.parse
 import klite.urlEncode
 import org.junit.jupiter.api.Test
 import redis.clients.jedis.RedisClient
+import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.minutes
 
 private val withoutMari by lazy { App.start(server(allowed = setOf("jaan.kask@näide.ee"))) }
 
@@ -62,6 +64,23 @@ class AppTest {
       .toHaveElementsAndAll { toEqual("https://fov.ee") }
   }
 
+  @Test fun `signing in from a malformed or overlong page returns to the home page`() {
+    expect(listOf("/radio\r\nSet-Cookie: x=1", "/" + "radio".repeat(500)).map { signIn(MARI, it).location })
+      .toHaveElementsAndAll { toEqual("https://fov.ee") }
+  }
+
+  @Test fun `signing in asks Google for a code bound to a PKCE challenge`() {
+    expect(startSignIn().location.param("code_challenge_method")).toEqual("S256")
+  }
+
+  @Test fun `a signed-in session is kept in Redis for 30 days`() {
+    expect(sessionTtl(signIn(MARI).cookie)).toBeGreaterThan(30.days.inWholeSeconds - 10).toBeLessThanOrEqualTo(30.days.inWholeSeconds)
+  }
+
+  @Test fun `a sign-in in progress is kept in Redis for 10 minutes`() {
+    expect(sessionTtl(startSignIn().cookie)).toBeGreaterThan(10.minutes.inWholeSeconds - 10).toBeLessThanOrEqualTo(10.minutes.inWholeSeconds)
+  }
+
   @Test fun `signing in starts a new session in a cookie for 30 days, sent only over HTTPS and hidden from scripts`() {
     val signedIn = signIn(MARI)
     expect(signedIn.cookie).notToEqual(signedIn.request().headers().firstValue("Cookie").get())
@@ -90,6 +109,12 @@ class AppTest {
   @Test fun `a callback for a sign-in that didn't start here returns to the login page`() {
     val code = atGoogle(startSignIn(), MARI).param("code")
     expect(get("/login/oauth2/code/google?code=$code").location).toEqual("/login?error")
+  }
+
+  @Test fun `a callback that isn't for a sign-in in progress leaves the visitor signed in`() {
+    val session = signIn(MARI).cookie
+    expect(get("/login/oauth2/code/google", "Cookie", session).location).toEqual("/login?error")
+    expect(get("/validate", "Cookie", session).statusCode()).toEqual(200)
   }
 
   @Test fun `a code Google turns down returns to the login page`() {
@@ -152,7 +177,7 @@ class AppTest {
   }
 
   @Test fun `a signed-out visitor is sent to sign in without a session`() {
-    expect(listOf("/", "/home", "/user").map { get(it) }).toHaveElementsAndAll {
+    expect(listOf("/", "/home", "/user", "/validate").map { get(it) }).toHaveElementsAndAll {
       its { location }.toEqual("/login")
       its { headers().allValues("Set-Cookie") }.toBeEmpty()
     }

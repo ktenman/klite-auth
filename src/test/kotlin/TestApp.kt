@@ -7,9 +7,11 @@ import klite.Server
 import klite.StatusCode.Companion.BadRequest
 import klite.StatusCode.Companion.OK
 import klite.StatusCode.Companion.Unauthorized
+import klite.base64UrlEncode
 import klite.queryParams
 import klite.urlEncode
 import klite.urlEncodeParams
+import redis.clients.jedis.RedisClient
 import java.net.InetSocketAddress
 import java.net.URI
 import java.net.http.HttpClient
@@ -17,6 +19,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpRequest.BodyPublishers
 import java.net.http.HttpResponse
 import java.net.http.HttpResponse.BodyHandlers
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -37,12 +40,13 @@ object App {
   }
 
   val url = start(server())
+  val redis = RedisClient.create(Config["REDIS_URL"])
 
   fun start(server: Server) = server.run { start(); "http://localhost:${address.port}" }
 }
 
 object Google {
-  private class Grant(val email: String, val redirectUri: String)
+  private class Grant(val email: String, val redirectUri: String, val codeChallenge: String)
   private val grants = ConcurrentHashMap<String, Grant>()
   private val emailsByToken = ConcurrentHashMap<String, String>()
 
@@ -50,9 +54,9 @@ object Google {
     context("/") {
       get("auth") {
         val scopes = query("scope").orEmpty().split(" ")
-        if (query("client_id") != "fov" || query("response_type") != "code" || "email" !in scopes || "profile" !in scopes)
+        if (query("client_id") != "fov" || query("response_type") != "code" || "email" !in scopes || "profile" !in scopes || query("code_challenge_method") != "S256")
           throw BadRequestException("invalid_request")
-        val code = UUID.randomUUID().toString().also { grants[it] = Grant(query("login_hint")!!, query("redirect_uri")!!) }
+        val code = UUID.randomUUID().toString().also { grants[it] = Grant(query("login_hint")!!, query("redirect_uri")!!, query("code_challenge")!!) }
         redirect(query("redirect_uri") + "?" + urlEncodeParams("state" to query("state"), "code" to code,
           "scope" to "email profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
           "authuser" to 0, "prompt" to "consent"))
@@ -61,7 +65,7 @@ object Google {
         if (body<String>("client_id") != "fov" || body<String>("client_secret") != "saladus")
           return@post send(Unauthorized, """{"error":"invalid_client","error_description":"Unauthorized"}""", MimeTypes.json)
         val email = grants.remove(body<String>("code"))
-          ?.takeIf { body<String>("grant_type") == "authorization_code" && body<String>("redirect_uri") == it.redirectUri }?.email
+          ?.takeIf { body<String>("grant_type") == "authorization_code" && body<String>("redirect_uri") == it.redirectUri && sha256(body("code_verifier")) == it.codeChallenge }?.email
           ?: return@post send(BadRequest, """{"error":"invalid_grant","error_description":"Bad Request"}""", MimeTypes.json)
         val token = UUID.randomUUID().toString().also { emailsByToken[it] = email }
         send(OK, """{"access_token":"$token","expires_in":3599,"scope":"https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile","token_type":"Bearer"}""", MimeTypes.json)
@@ -104,3 +108,7 @@ val HttpResponse<*>.cookie: String get() =
     ?: throw AssertionError("no session cookie in ${statusCode()} ${headers()}")
 
 fun String.param(name: String) = URI(this).queryParams[name]
+
+fun sessionTtl(cookie: String) = App.redis.ttl("auth:session:" + cookie.substringAfter("="))
+
+private fun sha256(text: String) = MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).base64UrlEncode()
