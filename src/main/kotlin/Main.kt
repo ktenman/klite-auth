@@ -21,7 +21,8 @@ import klite.urlDecodeParams
 import klite.urlEncode
 import klite.urlEncodeParams
 import klite.warn
-import redis.clients.jedis.JedisPooled
+import redis.clients.jedis.RedisClient
+import redis.clients.jedis.params.SetParams
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -46,7 +47,7 @@ private val log = logger("auth")
 fun main() { server().start() }
 
 fun server(
-  redis: JedisPooled = JedisPooled(Config.optional("REDIS_URL", "redis://redis:6379")),
+  redis: RedisClient = RedisClient.create(Config.optional("REDIS_URL", "redis://redis:6379")),
   allowed: Set<String> = Config["ALLOWED_EMAILS"].split(",").map { it.trim() }.toSet()
 ) =
   Server(httpExchangeCreator = ::XForwardedHttpExchange, sessionStore = RedisSessions(redis)).apply {
@@ -93,14 +94,14 @@ private const val COOKIE = "AUTHSESSION"
 private val TTL = 30.days
 
 /** Sessions in Redis, under a random id in the AUTHSESSION cookie. A changed session moves to a new id, so signing in never keeps the id from before. */
-private class RedisSessions(private val redis: JedisPooled) : SessionStore {
+private class RedisSessions(private val redis: RedisClient) : SessionStore {
   override fun load(exchange: HttpExchange) = exchange.cookie(COOKIE)?.let { redis.get(key(it)) }
     ?.let { Session(HashMap<String, Comparable<*>?>(urlDecodeParams(it)), isNew = false) } ?: Session()
 
   override fun save(exchange: HttpExchange, session: Session) {
     if (!session.changed) return
     exchange.cookie(COOKIE)?.let { redis.del(key(it)) }
-    val id = if (session.params.isEmpty()) "" else randomId().also { redis.setex(key(it), TTL.inWholeSeconds, urlEncodeParams(session.params)) }
+    val id = if (session.params.isEmpty()) "" else randomId().also { redis.set(key(it), urlEncodeParams(session.params), SetParams().ex(TTL.inWholeSeconds)) }
     exchange += Cookie(COOKIE, id, maxAge = if (id.isEmpty()) Duration.ZERO else TTL, httpOnly = true, secure = true, sameSite = SameSite.None)
   }
 

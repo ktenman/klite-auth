@@ -1,7 +1,7 @@
 package ee.tenman.auth
 
 import klite.urlEncode
-import redis.clients.jedis.JedisPooled
+import redis.clients.jedis.RedisClient
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -16,7 +16,7 @@ class AppTest {
   }
 
   @Test fun `health fails while Redis is unreachable`() {
-    val down = App.start(server(JedisPooled("redis://localhost:1")))
+    val down = App.start(server(RedisClient.create("redis://localhost:1")))
     assertEquals(500, get("$down/actuator/health").statusCode())
   }
 
