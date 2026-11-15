@@ -84,6 +84,8 @@ fun server(
         header("X-User-Id", email)
         send(OK, """{"message":"Session validated successfully"}""", MimeTypes.json)
       }
+
+      post("logout") { session.clear(); redirect("/") }
     }
   }
 

@@ -122,4 +122,18 @@ class AppTest {
     assertEquals(401, response.statusCode())
     assertFalse(response.headers().firstValue("X-User-Id").isPresent)
   }
+
+  @Test fun `signing out ends the session and expires its cookie`() {
+    val session = signIn(MARI).cookie
+    val response = post("${App.url}/logout", "Cookie", session)
+    assertEquals("/", response.location)
+    assertContains(response.headers().allValues("Set-Cookie").single(), "AUTHSESSION=; Max-Age=0")
+    assertEquals("/login", get("${App.url}/validate", "Cookie", session).location)
+  }
+
+  @Test fun `signing out by GET leaves the session signed in`() {
+    val session = signIn(MARI).cookie
+    assertEquals(404, get("${App.url}/logout", "Cookie", session).statusCode())
+    assertEquals(200, get("${App.url}/validate", "Cookie", session).statusCode())
+  }
 }

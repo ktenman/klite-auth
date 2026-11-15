@@ -14,6 +14,7 @@ import java.net.InetSocketAddress
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
+import java.net.http.HttpRequest.BodyPublishers
 import java.net.http.HttpResponse
 import java.net.http.HttpResponse.BodyHandlers
 import java.util.UUID
@@ -79,8 +80,11 @@ object Google {
 
 private val http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build()
 
-fun get(url: String, vararg headers: String): HttpResponse<String> =
-  http.send(HttpRequest.newBuilder(URI(url)).apply { if (headers.isNotEmpty()) headers(*headers) }.build(), BodyHandlers.ofString())
+fun get(url: String, vararg headers: String) = send(request(url, *headers))
+fun post(url: String, vararg headers: String) = send(request(url, *headers).POST(BodyPublishers.noBody()))
+
+private fun request(url: String, vararg headers: String) = HttpRequest.newBuilder(URI(url)).apply { if (headers.isNotEmpty()) headers(*headers) }
+private fun send(request: HttpRequest.Builder): HttpResponse<String> = http.send(request.build(), BodyHandlers.ofString())
 
 fun startSignIn(page: String? = null, vararg headers: String) =
   get("${App.url}/oauth2/authorization/google" + page?.let { "?redirect=" + it.urlEncode() }.orEmpty(), *headers)
