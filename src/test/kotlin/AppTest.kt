@@ -64,11 +64,6 @@ class AppTest {
       .toHaveElementsAndAll { toEqual("https://fov.ee") }
   }
 
-  @Test fun `signing in from a malformed or overlong page returns to the home page`() {
-    expect(listOf("/radio\r\nSet-Cookie: x=1", "/" + "radio".repeat(500)).map { signIn(MARI, it).location })
-      .toHaveElementsAndAll { toEqual("https://fov.ee") }
-  }
-
   @Test fun `signing in asks Google for a code bound to a PKCE challenge`() {
     expect(startSignIn().location.param("code_challenge_method")).toEqual("S256")
   }

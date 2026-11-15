@@ -28,10 +28,10 @@ still work, sends 27,000 requests (mostly `/validate`, as Caddy's `forward_auth`
 
 | | klite-auth (JVM, AOT cache) | auth (Spring, native image) |
 |---|---|---|
-| Startup | 0.9–1.0 s | 0.8–1.0 s |
-| 27,000 requests | 2.2–2.5 s | 10.7–12.3 s |
-| Memory after load (anon) | 64–66 MiB | 23 MiB |
-| Image | 48 MB | 73 MB |
-| Kotlin, main / test | 133 / 236 lines | 299 / 185 lines |
+| Startup | 0.8–0.9 s | 0.8–1.0 s |
+| 27,000 requests | 2.0 s | 10.7–12.3 s |
+| Memory after load (anon) | 65–68 MiB | 23 MiB |
+| Image | 47 MB | 73 MB |
+| Kotlin, main / test | 277 / 266 lines | 299 / 185 lines |
 
 Three runs each, on an Apple Silicon Mac, 2026-11-15.

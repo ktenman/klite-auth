@@ -18,6 +18,7 @@ RUN GOOGLE_CLIENT_ID=x GOOGLE_CLIENT_SECRET=x REDIRECT_URI=x ALLOWED_EMAILS=x \
     /app/jre/bin/java -XX:AOTCacheOutput=/app/auth.aot -cp "/app/lib/*" ee.tenman.auth.MainKt & \
     until curl -s -o /dev/null localhost:8083/login; do sleep 0.2; done; \
     curl -s -o /dev/null localhost:8083/validate; curl -s -o /dev/null localhost:8083/missing; \
+    curl -s -o /dev/null localhost:8083/oauth2/authorization/google; \
     kill $! && wait $!; test -f /app/auth.aot
 USER user
 CMD ["/app/jre/bin/java", "-XX:AOTCache=/app/auth.aot", "-cp", "/app/lib/*", "ee.tenman.auth.MainKt"]
