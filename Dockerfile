@@ -13,7 +13,13 @@ FROM alpine:3.22
 RUN apk add --no-cache curl && adduser -S user
 COPY --from=build /app/jre /app/jre
 COPY --from=build /app/build/install/klite-auth/lib /app/lib
-USER user
 ENV PORT=8083
 ENV JAVA_TOOL_OPTIONS="-Xmx128m -Xmn8m -Xss256k -XX:TieredStopAtLevel=1 -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError"
-CMD ["/app/jre/bin/java", "-cp", "/app/lib/*", "ee.tenman.auth.MainKt"]
+# A training run: later starts map the classes it loaded from this AOT cache, ~12 MiB less memory than loading them
+RUN GOOGLE_CLIENT_ID=x GOOGLE_CLIENT_SECRET=x REDIRECT_URI=x ALLOWED_EMAILS=x \
+    /app/jre/bin/java -XX:AOTCacheOutput=/app/auth.aot -cp "/app/lib/*" ee.tenman.auth.MainKt & \
+    until curl -s -o /dev/null localhost:8083/login; do sleep 0.2; done; \
+    curl -s -o /dev/null localhost:8083/validate; curl -s -o /dev/null localhost:8083/missing; \
+    kill $! && wait $!; test -f /app/auth.aot
+USER user
+CMD ["/app/jre/bin/java", "-XX:AOTCache=/app/auth.aot", "-cp", "/app/lib/*", "ee.tenman.auth.MainKt"]
