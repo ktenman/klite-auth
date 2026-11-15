@@ -18,6 +18,7 @@ import klite.json.JsonMapper
 import klite.json.parse
 import klite.logger
 import klite.urlDecodeParams
+import klite.urlEncode
 import klite.urlEncodeParams
 import klite.warn
 import redis.clients.jedis.JedisPooled
@@ -37,7 +38,6 @@ private val authorizationUri = Config.optional("GOOGLE_AUTHORIZATION_URI", "http
 private val tokenUri = Config.optional("GOOGLE_TOKEN_URI", "https://www.googleapis.com/oauth2/v4/token")
 private val userInfoUri = Config.optional("GOOGLE_USER_INFO_URI", "https://www.googleapis.com/oauth2/v3/userinfo")
 private val redirectUrl = Config["REDIRECT_URI"]
-private val allowedEmails = Config["ALLOWED_EMAILS"].split(",").map { it.trim() }.toSet()
 
 private val LOGIN = page("login")
 private val ERROR = page("error")
@@ -45,7 +45,10 @@ private val log = logger("auth")
 
 fun main() { server().start() }
 
-fun server(redis: JedisPooled = JedisPooled(Config.optional("REDIS_URL", "redis://redis:6379"))) =
+fun server(
+  redis: JedisPooled = JedisPooled(Config.optional("REDIS_URL", "redis://redis:6379")),
+  allowed: Set<String> = Config["ALLOWED_EMAILS"].split(",").map { it.trim() }.toSet()
+) =
   Server(httpExchangeCreator = ::XForwardedHttpExchange, sessionStore = RedisSessions(redis)).apply {
     renderers.add(0, ErrorPage)
     context("/") {
@@ -70,9 +73,16 @@ fun server(redis: JedisPooled = JedisPooled(Config.optional("REDIS_URL", "redis:
         val code = query("code")
         if (code == null || state == null || query("state") != state) redirect("/login?error")
         val email = runCatching { googleEmail(code) }.getOrElse { log.warn("Google sign-in failed: $it"); redirect("/login?error") }
-        if (email !in allowedEmails) throw UnauthorizedException("Not allowed to sign in: $email")
+        if (email !in allowed) throw UnauthorizedException("Not allowed to sign in: $email")
         session["email"] = email
         redirect(page?.let { redirectUrl.removeSuffix("/") + it } ?: redirectUrl)
+      }
+
+      get("validate") {
+        val email = session["email"] ?: redirect("/login" + header("X-Forwarded-Uri")?.let { "?redirect=" + it.urlEncode() }.orEmpty())
+        if (email !in allowed) throw UnauthorizedException("No longer allowed: $email")
+        header("X-User-Id", email)
+        send(OK, """{"message":"Session validated successfully"}""", MimeTypes.json)
       }
     }
   }
@@ -117,10 +127,12 @@ private fun HttpExchange.callbackUrl() = fullUrl("/login/oauth2/code/google").to
 private val random = SecureRandom()
 private fun randomId() = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also(random::nextBytes))
 
+/** Klite renders errors and redirects; errors show the error page, redirects need no body */
 private object ErrorPage : BodyRenderer {
   override val contentType = MimeTypes.html
   override fun render(e: HttpExchange, code: StatusCode, value: Any?) =
-    e.send(code, ERROR.replace("<!--status-->", "<p>${code.reason}</p>\n        <p>${code.value}</p>"), contentType)
+    if (code.value < 400) e.send(code)
+    else e.send(code, ERROR.replace("<!--status-->", "<p>${code.reason}</p>\n        <p>${code.value}</p>"), contentType)
 }
 
 private fun page(name: String) = ClassLoader.getSystemResource("$name.html").readText()

@@ -94,4 +94,32 @@ class AppTest {
     assertEquals("https://fov.ee/login/oauth2/code/google", startSignIn(null, *caddy).location.param("redirect_uri"))
     assertEquals("https://fov.ee/radio", signIn(MARI, "/radio", *caddy).location)
   }
+
+  @Test fun `validate names the signed-in user to Caddy`() {
+    val response = get("${App.url}/validate", "Cookie", signIn(MARI).cookie, "Accept", "application/json")
+    assertEquals(200, response.statusCode())
+    assertEquals(MARI, response.headers().firstValue("X-User-Id").get())
+  }
+
+  @Test fun `validate accepts a signed-in session whose request accepts only event streams`() {
+    assertEquals(200, get("${App.url}/validate", "Cookie", signIn(MARI).cookie, "Accept", "text/event-stream").statusCode())
+  }
+
+  @Test fun `validate sends a visitor without a session to sign in, with the page they asked for`() {
+    val response = get("${App.url}/validate", "Accept", "application/json", "X-Forwarded-Uri", "/radio/2026-10-22-1200-sihik")
+    assertEquals(302, response.statusCode())
+    assertEquals("/login?redirect=%2Fradio%2F2026-10-22-1200-sihik", response.location)
+    assertEquals("", response.body())
+  }
+
+  @Test fun `validate sends a sign-in still in progress to the login page`() {
+    assertEquals("/login", get("${App.url}/validate", "Cookie", startSignIn().cookie).location)
+  }
+
+  @Test fun `validate turns away a session whose email has left the list`() {
+    val session = signIn(MARI).cookie
+    val response = get(App.start(server(allowed = setOf("jaan.kask@näide.ee"))) + "/validate", "Cookie", session)
+    assertEquals(401, response.statusCode())
+    assertFalse(response.headers().firstValue("X-User-Id").isPresent)
+  }
 }
