@@ -1,0 +1,6 @@
+# Redis for the tests: docker compose up -d
+services:
+  redis:
+    image: redis:8-alpine
+    ports:
+      - 6380:6379
