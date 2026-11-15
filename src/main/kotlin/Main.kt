@@ -13,10 +13,18 @@ import klite.StatusCode
 import klite.StatusCode.Companion.OK
 import klite.UnauthorizedException
 import klite.XForwardedHttpExchange
+import klite.base64UrlEncode
 import klite.html.escapeHtml
+import klite.http.authBearer
+import klite.http.bodyOrThrow
+import klite.http.contentType
+import klite.http.get
+import klite.http.httpClient
+import klite.http.post
 import klite.json.JsonMapper
 import klite.json.parse
 import klite.logger
+import klite.plus
 import klite.urlDecodeParams
 import klite.urlEncode
 import klite.urlEncodeParams
@@ -24,14 +32,11 @@ import klite.warn
 import redis.clients.jedis.RedisClient
 import redis.clients.jedis.params.SetParams
 import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpRequest.BodyPublishers
-import java.net.http.HttpResponse.BodyHandlers
+import java.security.MessageDigest
 import java.security.SecureRandom
-import java.util.Base64
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.minutes
 
 private val clientId = Config["GOOGLE_CLIENT_ID"]
 private val clientSecret = Config["GOOGLE_CLIENT_SECRET"]
@@ -52,7 +57,8 @@ fun server(
   allowed: Set<String> = Config["ALLOWED_EMAILS"].split(",").map { it.trim() }.toSet()
 ) =
   Server(httpExchangeCreator = ::XForwardedHttpExchange, sessionStore = RedisSessions(redis)).apply {
-    renderers.add(0, ErrorPage)
+    renderers.clear()
+    renderers += ErrorPage
     context("/") {
       get("actuator/health") { redis.ping(); send(OK, """{"status":"UP"}""", MimeTypes.json) }
 
@@ -63,18 +69,21 @@ fun server(
 
       get("oauth2/authorization/google") {
         session["state"] = randomId()
-        session["page"] = query("redirect")?.takeIf { it.startsWith("/") && !it.startsWith("//") }
-        redirect("$authorizationUri?" + urlEncodeParams("client_id" to clientId, "redirect_uri" to callbackUrl(),
-          "response_type" to "code", "scope" to "email profile", "state" to session["state"]))
+        session["verifier"] = randomId()
+        session["page"] = query("redirect")?.takeIf { it.isPathOnThisSite() }
+        redirect(URI(authorizationUri) + mapOf("client_id" to clientId, "redirect_uri" to callbackUrl(),
+          "response_type" to "code", "scope" to "email profile", "state" to session["state"],
+          "code_challenge" to session["verifier"]!!.sha256(), "code_challenge_method" to "S256"))
       }
 
       get("login/oauth2/code/google") {
         val state = session["state"]
+        val verifier = session["verifier"]
+        val code = query("code")
+        if (code == null || state == null || verifier == null || query("state") != state) redirect("/login?error")
         val page = session["page"]
         session.clear()
-        val code = query("code")
-        if (code == null || state == null || query("state") != state) redirect("/login?error")
-        val profile = runCatching { googleProfile(code) }.getOrElse { log.warn("Google sign-in failed: $it"); redirect("/login?error") }
+        val profile = runCatching { googleProfile(code, verifier) }.getOrElse { log.warn("Google sign-in failed: $it"); redirect("/login?error") }
         if (profile["email"] !in allowed) throw UnauthorizedException("Not allowed to sign in: ${profile["email"]}")
         for (key in listOf("email", "name", "given_name", "family_name", "picture")) session[key] = profile[key] as String?
         redirect(page?.let { redirectUrl.removeSuffix("/") + it } ?: redirectUrl)
@@ -102,14 +111,13 @@ fun server(
     }
   }
 
-/** The signed-in email, or off to sign in and come back to the page asked for */
 private fun HttpExchange.signedIn() =
   session["email"] ?: redirect("/login" + header("X-Forwarded-Uri")?.let { "?redirect=" + it.urlEncode() }.orEmpty())
 
-private const val COOKIE = "AUTHSESSION"
-private val TTL = 30.days
+private fun String.isPathOnThisSite() = length <= 2048 && startsWith("/") && !startsWith("//") && runCatching { URI(this) }.isSuccess
 
-/** Sessions in Redis, under a random id in the AUTHSESSION cookie. A changed session moves to a new id, so signing in never keeps the id from before. */
+private const val COOKIE = "AUTHSESSION"
+
 private class RedisSessions(private val redis: RedisClient) : SessionStore {
   override fun load(exchange: HttpExchange) = exchange.cookie(COOKIE)?.let { redis.get(key(it)) }
     ?.let { Session(HashMap<String, Comparable<*>?>(urlDecodeParams(it)), isNew = false) } ?: Session()
@@ -117,36 +125,35 @@ private class RedisSessions(private val redis: RedisClient) : SessionStore {
   override fun save(exchange: HttpExchange, session: Session) {
     if (!session.changed) return
     exchange.cookie(COOKIE)?.let { redis.del(key(it)) }
-    val id = if (session.params.isEmpty()) "" else randomId().also { redis.set(key(it), urlEncodeParams(session.params), SetParams().ex(TTL.inWholeSeconds)) }
-    exchange += Cookie(COOKIE, id, maxAge = if (id.isEmpty()) Duration.ZERO else TTL, httpOnly = true, secure = true, sameSite = SameSite.None)
+    val lifetime = session.lifetime()
+    val id = if (lifetime == Duration.ZERO) "" else randomId().also { redis.set(key(it), urlEncodeParams(session.params), SetParams().ex(lifetime.inWholeSeconds)) }
+    exchange += Cookie(COOKIE, id, maxAge = lifetime, httpOnly = true, secure = true, sameSite = SameSite.None)
+  }
+
+  private fun Session.lifetime() = when {
+    params.isEmpty() -> Duration.ZERO
+    this["email"] == null -> 10.minutes
+    else -> 30.days
   }
 
   private fun key(id: String) = "auth:session:$id"
 }
 
-private val http = HttpClient.newHttpClient()
+private val http by lazy { httpClient() }
 private val json = JsonMapper()
 
-/** Swaps the code for a token and asks Google whose it is */
-private fun HttpExchange.googleProfile(code: String): Map<String, Any?> {
-  val token = google(HttpRequest.newBuilder(URI(tokenUri)).header("Content-Type", MimeTypes.wwwForm)
-    .POST(BodyPublishers.ofString(urlEncodeParams("grant_type" to "authorization_code", "code" to code,
-      "redirect_uri" to callbackUrl(), "client_id" to clientId, "client_secret" to clientSecret))))["access_token"]
-  return google(HttpRequest.newBuilder(URI(userInfoUri)).header("Authorization", "Bearer $token"))
-}
-
-private fun google(request: HttpRequest.Builder): Map<String, Any?> {
-  val response = http.send(request.build(), BodyHandlers.ofString())
-  check(response.statusCode() == 200) { "Google answered ${response.statusCode()}: ${response.body()}" }
-  return json.parse(response.body())
+private fun HttpExchange.googleProfile(code: String, verifier: String): Map<String, Any?> {
+  val token = json.parse<Map<String, Any?>>(http.post(URI(tokenUri), urlEncodeParams("grant_type" to "authorization_code", "code" to code,
+    "redirect_uri" to callbackUrl(), "client_id" to clientId, "client_secret" to clientSecret, "code_verifier" to verifier)) { contentType(MimeTypes.wwwForm) }.bodyOrThrow())
+  return json.parse(http.get(URI(userInfoUri)) { authBearer("${token["access_token"]}") }.bodyOrThrow())
 }
 
 private fun HttpExchange.callbackUrl() = fullUrl("/login/oauth2/code/google").toString()
 
 private val random = SecureRandom()
-private fun randomId() = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also(random::nextBytes))
+private fun randomId() = ByteArray(32).also(random::nextBytes).base64UrlEncode()
+private fun String.sha256() = MessageDigest.getInstance("SHA-256").digest(toByteArray()).base64UrlEncode()
 
-/** Klite renders errors and redirects; errors show the error page, redirects need no body */
 private object ErrorPage : BodyRenderer {
   override val contentType = MimeTypes.html
   override fun render(e: HttpExchange, code: StatusCode, value: Any?) =

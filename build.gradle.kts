@@ -12,9 +12,11 @@ dependencies {
 	fun klite(module: String) = "com.github.keksworks.klite:klite-$module:2.1.3"
 	implementation(klite("server"))
 	implementation(klite("json"))
-	implementation(klite("slf4j")) // one line per log entry, Jedis's included
+	implementation(klite("slf4j"))
 	implementation("redis.clients:jedis:7.4.1")
-	testImplementation(kotlin("test"))
+	testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
+	testImplementation("ch.tutteli.atrium:atrium-fluent:1.3.0")
+	testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.1.3")
 }
 
 kotlin { jvmToolchain(25) }

@@ -7,9 +7,11 @@ import klite.Server
 import klite.StatusCode.Companion.BadRequest
 import klite.StatusCode.Companion.OK
 import klite.StatusCode.Companion.Unauthorized
-import klite.urlDecodeParams
+import klite.base64UrlEncode
+import klite.queryParams
 import klite.urlEncode
 import klite.urlEncodeParams
+import redis.clients.jedis.RedisClient
 import java.net.InetSocketAddress
 import java.net.URI
 import java.net.http.HttpClient
@@ -17,13 +19,13 @@ import java.net.http.HttpRequest
 import java.net.http.HttpRequest.BodyPublishers
 import java.net.http.HttpResponse
 import java.net.http.HttpResponse.BodyHandlers
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 const val MARI = "mari.tamm@näide.ee"
 const val JURI = "jüri.kask@näide.ee"
 
-/** The app on a free port, against the Redis in compose.yaml and the fake [Google] */
 object App {
   init {
     Config["PORT"] = "0"
@@ -34,26 +36,27 @@ object App {
     Config["GOOGLE_TOKEN_URI"] = "${Google.url}/token"
     Config["GOOGLE_USER_INFO_URI"] = "${Google.url}/userinfo"
     Config["REDIRECT_URI"] = "https://fov.ee"
-    Config["ALLOWED_EMAILS"] = "jaan.kask@näide.ee, $MARI" // Spring trimmed the space too
+    Config["ALLOWED_EMAILS"] = "jaan.kask@näide.ee, $MARI"
   }
 
   val url = start(server())
+  val redis = RedisClient.create(Config["REDIS_URL"])
 
   fun start(server: Server) = server.run { start(); "http://localhost:${address.port}" }
 }
 
-/** Google's OAuth endpoints, as far as the app uses them. Who signs in at Google is the `login_hint` added to the authorization URL. */
 object Google {
-  private val codes = ConcurrentHashMap<String, Pair<String, String>>() // code to email and redirect_uri
-  private val tokens = ConcurrentHashMap<String, String>() // access token to email
+  private class Grant(val email: String, val redirectUri: String, val codeChallenge: String)
+  private val grants = ConcurrentHashMap<String, Grant>()
+  private val emailsByToken = ConcurrentHashMap<String, String>()
 
   val url = Server(InetSocketAddress(0)).apply {
     context("/") {
       get("auth") {
         val scopes = query("scope").orEmpty().split(" ")
-        if (query("client_id") != "fov" || query("response_type") != "code" || "email" !in scopes || "profile" !in scopes)
+        if (query("client_id") != "fov" || query("response_type") != "code" || "email" !in scopes || "profile" !in scopes || query("code_challenge_method") != "S256")
           throw BadRequestException("invalid_request")
-        val code = UUID.randomUUID().toString().also { codes[it] = query("login_hint")!! to query("redirect_uri")!! }
+        val code = UUID.randomUUID().toString().also { grants[it] = Grant(query("login_hint")!!, query("redirect_uri")!!, query("code_challenge")!!) }
         redirect(query("redirect_uri") + "?" + urlEncodeParams("state" to query("state"), "code" to code,
           "scope" to "email profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
           "authuser" to 0, "prompt" to "consent"))
@@ -61,14 +64,14 @@ object Google {
       post("token") {
         if (body<String>("client_id") != "fov" || body<String>("client_secret") != "saladus")
           return@post send(Unauthorized, """{"error":"invalid_client","error_description":"Unauthorized"}""", MimeTypes.json)
-        val email = codes.remove(body<String>("code"))
-          ?.takeIf { body<String>("grant_type") == "authorization_code" && body<String>("redirect_uri") == it.second }?.first
+        val email = grants.remove(body<String>("code"))
+          ?.takeIf { body<String>("grant_type") == "authorization_code" && body<String>("redirect_uri") == it.redirectUri && sha256(body("code_verifier")) == it.codeChallenge }?.email
           ?: return@post send(BadRequest, """{"error":"invalid_grant","error_description":"Bad Request"}""", MimeTypes.json)
-        val token = UUID.randomUUID().toString().also { tokens[it] = email }
+        val token = UUID.randomUUID().toString().also { emailsByToken[it] = email }
         send(OK, """{"access_token":"$token","expires_in":3599,"scope":"https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile","token_type":"Bearer"}""", MimeTypes.json)
       }
       get("userinfo") {
-        val email = tokens[header("Authorization")?.removePrefix("Bearer ")]
+        val email = emailsByToken[header("Authorization")?.removePrefix("Bearer ")]
           ?: return@get send(Unauthorized, """{"error":"invalid_request","error_description":"Invalid Credentials"}""", MimeTypes.json)
         val (given, family) = email.substringBefore("@").split(".").map { n -> n.replaceFirstChar { it.uppercase() } }
         send(OK, """{"sub":"${email.hashCode()}","name":"$given $family","given_name":"$given","family_name":"$family","picture":"https://lh3.googleusercontent.com/a/$given","email":"$email","email_verified":true}""", MimeTypes.json)
@@ -78,34 +81,34 @@ object Google {
   }.let { "http://localhost:${it.address.port}" }
 }
 
-private val http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build()
+private val http = HttpClient.newHttpClient()
 
 fun get(url: String, vararg headers: String) = send(request(url, *headers))
 fun post(url: String, vararg headers: String) = send(request(url, *headers).POST(BodyPublishers.noBody()))
 
-private fun request(url: String, vararg headers: String) = HttpRequest.newBuilder(URI(url)).apply { if (headers.isNotEmpty()) headers(*headers) }
+private fun request(url: String, vararg headers: String) = HttpRequest.newBuilder(URI(App.url).resolve(url)).apply { if (headers.isNotEmpty()) headers(*headers) }
 private fun send(request: HttpRequest.Builder): HttpResponse<String> = http.send(request.build(), BodyHandlers.ofString())
 
 fun startSignIn(page: String? = null, vararg headers: String) =
-  get("${App.url}/oauth2/authorization/google" + page?.let { "?redirect=" + it.urlEncode() }.orEmpty(), *headers)
+  get("/oauth2/authorization/google" + page?.let { "?redirect=" + it.urlEncode() }.orEmpty(), *headers)
 
-/** Where Google sends the browser back to once [email] has signed in there */
-fun atGoogle(start: HttpResponse<*>, email: String) = URI(get(start.location + "&login_hint=" + email.urlEncode()).location)
+fun atGoogle(start: HttpResponse<*>, email: String) = get(start.location + "&login_hint=" + email.urlEncode()).location
 
-/** The whole sign-in, as a browser walks it; returns the app's answer to Google's callback */
 fun signIn(email: String, page: String? = null, vararg headers: String): HttpResponse<String> {
   val start = startSignIn(page, *headers)
-  val back = atGoogle(start, email)
-  return get("${App.url}${back.rawPath}?${back.rawQuery}", "Cookie", start.cookie, *headers)
+  val back = URI(atGoogle(start, email))
+  return get("${back.rawPath}?${back.rawQuery}", "Cookie", start.cookie, *headers)
 }
 
 val HttpResponse<*>.location: String get() =
   headers().firstValue("Location").orElseThrow { AssertionError("no Location in ${statusCode()} ${body()}") }
 
-/** The AUTHSESSION cookie this response sets, ready to send back */
 val HttpResponse<*>.cookie: String get() =
   headers().allValues("Set-Cookie").firstOrNull { it.startsWith("AUTHSESSION=") }?.substringBefore(";")
     ?: throw AssertionError("no session cookie in ${statusCode()} ${headers()}")
 
-fun String.param(name: String) = urlDecodeParams(URI(this).rawQuery)[name]
-fun URI.param(name: String) = urlDecodeParams(rawQuery)[name]
+fun String.param(name: String) = URI(this).queryParams[name]
+
+fun sessionTtl(cookie: String) = App.redis.ttl("auth:session:" + cookie.substringAfter("="))
+
+private fun sha256(text: String) = MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).base64UrlEncode()
