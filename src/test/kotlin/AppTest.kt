@@ -1,5 +1,7 @@
 package ee.tenman.auth
 
+import klite.json.JsonMapper
+import klite.json.parse
 import klite.urlEncode
 import redis.clients.jedis.RedisClient
 import kotlin.test.Test
@@ -7,6 +9,7 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
 class AppTest {
   @Test fun `health is up while Redis answers`() {
@@ -135,5 +138,31 @@ class AppTest {
     val session = signIn(MARI).cookie
     assertEquals(404, get("${App.url}/logout", "Cookie", session).statusCode())
     assertEquals(200, get("${App.url}/validate", "Cookie", session).statusCode())
+  }
+
+  @Test fun `the home page greets a signed-in visitor`() {
+    val session = signIn(MARI).cookie
+    for (path in listOf("/", "/home"))
+      assertContains(get("${App.url}$path", "Cookie", session).body(), "Success! You have successfully logged in.", message = path)
+  }
+
+  @Test fun `a signed-out visitor is sent to sign in without a session`() {
+    for (path in listOf("/", "/home", "/user")) {
+      val response = get("${App.url}$path")
+      assertEquals("/login", response.location, path)
+      assertTrue(response.headers().allValues("Set-Cookie").isEmpty(), path)
+    }
+  }
+
+  @Test fun `user info describes the signed-in user`() {
+    val user = get("${App.url}/user", "Cookie", signIn(MARI).cookie)
+    assertEquals(mapOf("status" to "AUTHORIZED", "provider" to "google", "user" to mapOf("email" to MARI, "name" to "Mari Tamm",
+      "givenName" to "Mari", "familyName" to "Tamm", "picture" to "https://lh3.googleusercontent.com/a/Mari")), JsonMapper().parse<Map<String, Any?>>(user.body()))
+  }
+
+  @Test fun `user info for a session whose email has left the list says so`() {
+    val session = signIn(MARI).cookie
+    val user = get(App.start(server(allowed = setOf("jaan.kask@näide.ee"))) + "/user", "Cookie", session)
+    assertEquals(mapOf("status" to "UNAUTHORIZED", "message" to "User not authorized"), JsonMapper().parse<Map<String, Any?>>(user.body()))
   }
 }

@@ -41,6 +41,7 @@ private val userInfoUri = Config.optional("GOOGLE_USER_INFO_URI", "https://www.g
 private val redirectUrl = Config["REDIRECT_URI"]
 
 private val LOGIN = page("login")
+private val HOME = page("home")
 private val ERROR = page("error")
 private val log = logger("auth")
 
@@ -73,22 +74,37 @@ fun server(
         session.clear()
         val code = query("code")
         if (code == null || state == null || query("state") != state) redirect("/login?error")
-        val email = runCatching { googleEmail(code) }.getOrElse { log.warn("Google sign-in failed: $it"); redirect("/login?error") }
-        if (email !in allowed) throw UnauthorizedException("Not allowed to sign in: $email")
-        session["email"] = email
+        val profile = runCatching { googleProfile(code) }.getOrElse { log.warn("Google sign-in failed: $it"); redirect("/login?error") }
+        if (profile["email"] !in allowed) throw UnauthorizedException("Not allowed to sign in: ${profile["email"]}")
+        for (key in listOf("email", "name", "given_name", "family_name", "picture")) session[key] = profile[key] as String?
         redirect(page?.let { redirectUrl.removeSuffix("/") + it } ?: redirectUrl)
       }
 
       get("validate") {
-        val email = session["email"] ?: redirect("/login" + header("X-Forwarded-Uri")?.let { "?redirect=" + it.urlEncode() }.orEmpty())
+        val email = signedIn()
         if (email !in allowed) throw UnauthorizedException("No longer allowed: $email")
         header("X-User-Id", email)
         send(OK, """{"message":"Session validated successfully"}""", MimeTypes.json)
       }
 
       post("logout") { session.clear(); redirect("/") }
+
+      for (path in listOf("", "home")) get(path) { signedIn(); send(OK, HOME, MimeTypes.html) }
+
+      get("user") {
+        val email = signedIn()
+        send(OK, json.render(
+          if (email !in allowed) mapOf("status" to "UNAUTHORIZED", "message" to "User not authorized")
+          else mapOf("status" to "AUTHORIZED", "provider" to "google", "user" to mapOf("email" to email, "name" to session["name"].orEmpty(),
+            "givenName" to session["given_name"].orEmpty(), "familyName" to session["family_name"].orEmpty(), "picture" to session["picture"].orEmpty()))
+        ), MimeTypes.json)
+      }
     }
   }
+
+/** The signed-in email, or off to sign in and come back to the page asked for */
+private fun HttpExchange.signedIn() =
+  session["email"] ?: redirect("/login" + header("X-Forwarded-Uri")?.let { "?redirect=" + it.urlEncode() }.orEmpty())
 
 private const val COOKIE = "AUTHSESSION"
 private val TTL = 30.days
@@ -112,11 +128,11 @@ private val http = HttpClient.newHttpClient()
 private val json = JsonMapper()
 
 /** Swaps the code for a token and asks Google whose it is */
-private fun HttpExchange.googleEmail(code: String): String? {
+private fun HttpExchange.googleProfile(code: String): Map<String, Any?> {
   val token = google(HttpRequest.newBuilder(URI(tokenUri)).header("Content-Type", MimeTypes.wwwForm)
     .POST(BodyPublishers.ofString(urlEncodeParams("grant_type" to "authorization_code", "code" to code,
       "redirect_uri" to callbackUrl(), "client_id" to clientId, "client_secret" to clientSecret))))["access_token"]
-  return google(HttpRequest.newBuilder(URI(userInfoUri)).header("Authorization", "Bearer $token"))["email"] as String?
+  return google(HttpRequest.newBuilder(URI(userInfoUri)).header("Authorization", "Bearer $token"))
 }
 
 private fun google(request: HttpRequest.Builder): Map<String, Any?> {
