@@ -26,12 +26,19 @@ docker compose up -d   # Redis on localhost:6380
 still work, sends 27,000 requests (mostly `/validate`, as Caddy's `forward_auth` does), then reads the container's memory.
 `IMAGE=ktenman/auth:latest bench/run.sh` measures the Spring version the same way.
 
-| | klite-auth (JVM, AOT cache) | auth (Spring, native image) |
+| | klite-auth (native image) | auth (Spring, native image) |
 |---|---|---|
-| Startup | 0.8–0.9 s | 0.8–1.0 s |
-| 27,000 requests | 2.0 s | 10.7–12.3 s |
-| Memory after load (anon) | 65–68 MiB | 23 MiB |
-| Image | 47 MB | 73 MB |
+| Startup | 0.3 s | 0.8–0.9 s |
+| 27,000 requests | 2.0–2.1 s | 9.3–11.5 s |
+| Memory after load (anon) | 11 MiB | 23 MiB |
+| Image | 49 MB | 73 MB |
 | Kotlin, main / test | 277 / 266 lines | 299 / 185 lines |
 
-Three runs each, on an Apple Silicon Mac, 2026-11-15.
+Five runs each, on an Apple Silicon Mac, 2026-11-15.
+
+## Native image
+
+The Docker image is a GraalVM native image. `src/main/resources/META-INF/native-image/ee.tenman/klite-auth/reachability-metadata.json`
+lists what Klite reaches by reflection. It was recorded by running the tests under GraalVM's tracing agent, keeping only the
+app's entries (not Gradle's, JUnit's or the test classes'). Record it again after adding a class that Klite builds by
+reflection, such as a new JSON body, or the native image fails on that path while the JVM tests still pass.
