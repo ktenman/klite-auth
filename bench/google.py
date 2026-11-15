@@ -1,4 +1,3 @@
-# Stand-in for Google's OAuth2 endpoints: approves every sign-in as bench@example.com
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse

@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# Benchmark: builds ./Dockerfile, runs it the way production does (2 CPUs, no memory limit)
-# next to Redis and a mock Google, checks sign-in still works, sends a forward-auth burst, then
-# prints the container's memory the way `docker stats` reports it.
-#   IMAGE=<tag> bench/run.sh   measures a prebuilt image instead
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -11,7 +7,6 @@ APP=authbench-app
 CPUS=${CPUS:-2}
 now() { perl -MTime::HiRes=time -e 'printf "%.1f", time'; }
 since() { awk -v s="$1" -v n="$(now)" 'BEGIN { printf "%.1f", n - s }'; }
-mib() { awk '{ v = $1 + 0; u = $1; sub(/^[0-9.]+/, "", u); printf "%.1f", v * (u == "GiB" ? 1024 : u == "KiB" ? 1 / 1024 : u == "B" ? 1 / 1048576 : 1) }'; }
 in_client() { docker exec authbench-client "$@"; }
 
 cleanup() { docker rm -f "$APP" authbench-redis authbench-client >/dev/null 2>&1 || true; }
@@ -36,7 +31,6 @@ docker run -d --name "$APP" --network "$NET" --cpus="$CPUS" \
   -e GOOGLE_CLIENT_ID=bench -e GOOGLE_CLIENT_SECRET=bench \
   -e REDIRECT_URI=https://fov.ee -e ALLOWED_EMAILS=bench@example.com \
   -e GOOGLE_AUTHORIZATION_URI=$oauth/authorize -e GOOGLE_TOKEN_URI=$oauth/token -e GOOGLE_USER_INFO_URI=$oauth/userinfo \
-  `# the Spring names too, so IMAGE=ktenman/auth:latest measures the Spring version for comparison` \
   -e SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_GOOGLE_AUTHORIZATION_URI=$oauth/authorize \
   -e SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_GOOGLE_TOKEN_URI=$oauth/token \
   -e SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_GOOGLE_USER_INFO_URI=$oauth/userinfo \
@@ -53,7 +47,5 @@ echo "startup_s: $(since "$started")"
 in_client sh /bench/workload.sh
 
 sleep 5
-anon=$(docker exec "$APP" cat /sys/fs/cgroup/memory.stat 2>/dev/null | awk '$1 == "anon" { printf "%.1f", $2 / 1048576 }') || true
-echo "anon_mib: ${anon:-N/A}"
-echo "ws_mib: $(docker stats --no-stream --format '{{.MemUsage}}' "$APP" | awk '{print $1}' | mib)"
+echo "anon_mib: $(docker exec "$APP" cat /sys/fs/cgroup/memory.stat | awk '$1 == "anon" { printf "%.1f", $2 / 1048576 }')"
 if docker logs "$APP" 2>&1 | grep ' ERROR '; then echo "app logged errors"; exit 1; fi

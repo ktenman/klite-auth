@@ -1,5 +1,4 @@
 #!/bin/sh
-# Runs inside the client container: checks the service still behaves, then sends a fixed load.
 set -eu
 APP=http://authbench-app:8083
 JSON='Accept: application/json'
@@ -10,7 +9,6 @@ code() { head -1 | cut -d' ' -f2; }
 header() { grep -i "^$1: " | tail -1 | cut -d' ' -f2-; }
 session() { grep -i '^set-cookie: AUTHSESSION=' | tail -1 | sed 's/^[^=]*=//; s/;.*//'; }
 
-# Walks the Google sign-in against the mock provider and prints the signed-in session id
 login() {
   h=$(headers "$APP/oauth2/authorization/google?redirect=/radio/x")
   s=$(echo "$h" | session)
@@ -30,7 +28,6 @@ h=$(headers -H "$JSON" -H "Cookie: AUTHSESSION=$S" $APP/validate)
 L=$(login)
 [ "$(headers -X POST -H "Cookie: AUTHSESSION=$L" $APP/logout | code)" = 302 ] || fail "logout"
 [ "$(headers -H "$JSON" -H "Cookie: AUTHSESSION=$L" $APP/validate | code)" = 302 ] || fail "validate after logout"
-# The rest of the pages, and the requests that Spring answers by keeping a CSRF token or an error in the session
 curl -s -H "Cookie: AUTHSESSION=$S" $APP/user | grep -q '"email":"bench@example.com"' || fail "user"
 curl -s -H "Cookie: AUTHSESSION=$S" $APP/home | grep -q 'Dashboard' || fail "home page"
 curl -s -H "Cookie: AUTHSESSION=$S" $APP/missing | grep -q '<p>404</p>' || fail "error page"
@@ -51,7 +48,6 @@ load() {
   echo "$out" | grep -q '^Failed requests: *0$' || fail "failed requests in ab $*"
   total=$(echo "$out" | awk -v t="$total" '/^Time taken for tests/ { printf "%.2f", t + $5 }')
 }
-# Caddy's forward_auth: every request to a protected site asks /validate with the visitor's cookie
 load -n 20000 -c 8 -H "$JSON" -C "AUTHSESSION=$S" $APP/validate
 echo "$out" | grep -q '^Non-2xx' && fail "signed-in validate answered non-2xx under load"
 load -n 4000 -c 8 -H "$JSON" -H 'X-Forwarded-Uri: /radio/x' $APP/validate

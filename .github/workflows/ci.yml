@@ -2,16 +2,12 @@ name: Test
 
 on:
   push:
+    branches: [ main ]
   pull_request:
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      redis:
-        image: redis:8-alpine
-        ports:
-          - 6380:6379 # where the tests look, as in compose.yaml
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-java@v6.1.0
@@ -19,4 +15,5 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
       - uses: gradle/actions/setup-gradle@v6.4.1
+      - run: docker compose up -d --wait
       - run: ./gradlew test
