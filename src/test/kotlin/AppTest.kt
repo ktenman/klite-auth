@@ -34,4 +34,12 @@ class AppTest {
     assertContains(page, "Login with Google")
     assertFalse("name=\"redirect\"" in page)
   }
+
+  @Test fun `an unknown page shows the error page`() {
+    val response = get("${App.url}/missing")
+    assertEquals(404, response.statusCode())
+    assertContains(response.headers().firstValue("Content-Type").get(), "text/html")
+    assertContains(response.body(), "<p>Not Found</p>")
+    assertContains(response.body(), "<p>404</p>")
+  }
 }
