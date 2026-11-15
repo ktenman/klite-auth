@@ -131,7 +131,7 @@ src/main/kotlin
 Dependencies point inward: adapters use the use cases, and the use cases use the domain. The domain and use cases import
 nothing from Klite, Redis or HTTP.
 
-Dependabot opens monthly updates for Gradle and GitHub Actions; minor and patch updates merge themselves once CI passes.
+Dependabot opens monthly updates for Gradle and GitHub Actions; pull requests only run the tests, and minor and patch updates merge themselves once they pass.
 
 ## Testing
 
@@ -144,7 +144,7 @@ The tests start the service in-process against a stand-in for Google that enforc
 the allowlist, return paths, session lifetimes and Redis being down.
 
 `bench/run.sh` signs in against a stand-in for Google, checks the session, page and logout paths, sends 27,000 requests,
-then prints the container's memory use. CI runs it against each native image before pushing it.
+then prints the container's memory use. On `main`, CI runs it against each native image before pushing it.
 
 ## Docker
 
