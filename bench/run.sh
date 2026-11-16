@@ -44,7 +44,7 @@ until in_client curl -sf -o /dev/null http://$APP:8083/actuator/health; do
 done
 echo "startup_s: $(since "$started")"
 
-in_client sh /bench/workload.sh
+in_client env COOKIE="${COOKIE:-}" sh /bench/workload.sh
 
 sleep 5
 echo "anon_mib: $(docker exec "$APP" cat /sys/fs/cgroup/memory.stat | awk '$1 == "anon" { printf "%.1f", $2 / 1048576 }')"
