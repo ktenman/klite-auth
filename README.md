@@ -135,7 +135,7 @@ src/main/kotlin
 Dependencies point inward: adapters use the use cases, and the use cases use the domain. The domain and use cases import
 nothing from Klite, Redis or HTTP.
 
-Dependabot opens monthly updates for Gradle and GitHub Actions; pull requests only run the tests, and minor and patch updates merge themselves once they pass.
+Dependabot opens monthly updates for Gradle, GitHub Actions and the Docker base images; pull requests only run the tests, and minor and patch updates merge themselves once they pass.
 
 ## Testing
 
@@ -173,7 +173,7 @@ CI pushes the image to GitHub Container Registry as `ghcr.io/ktenman/klite-auth:
 
 ## Compared with the Spring version
 
-`IMAGE=ktenman/auth:latest bench/run.sh` measures the Spring version the same way, on 2 CPUs.
+`IMAGE=ktenman/auth:latest COOKIE=AUTHSESSION bench/run.sh` measures the Spring version the same way, on 2 CPUs.
 
 | | klite-auth (native image) | auth (Spring, native image) |
 |---|---|---|

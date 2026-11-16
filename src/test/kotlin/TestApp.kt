@@ -42,7 +42,8 @@ object App {
     Config["ALLOWED_EMAILS"] = "jaan.kask@näide.ee, $MARI, $KATI,"
   }
 
-  val url = start(server())
+  val server: Server = server()
+  val url = start(server)
   val redis = RedisClient.create(Config["REDIS_URL"])
 
   fun start(server: Server) = server.run { start(); "http://localhost:${address.port}" }
@@ -109,6 +110,9 @@ val HttpResponse<*>.location: String get() =
 val HttpResponse<*>.cookie: String get() =
   headers().allValues("Set-Cookie").firstOrNull { it.startsWith("__Host-AUTHSESSION=") }?.substringBefore(";")
     ?: throw AssertionError("no session cookie in ${statusCode()} ${headers()}")
+
+val HttpResponse<*>.maxAge: Long get() =
+  headers().firstValue("Set-Cookie").get().substringAfter("Max-Age=").substringBefore(";").toLong()
 
 fun String.param(name: String) = URI(this).queryParams[name]
 
