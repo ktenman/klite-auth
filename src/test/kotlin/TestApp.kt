@@ -2,8 +2,11 @@ package ee.tenman.auth
 
 import klite.BadRequestException
 import klite.Config
+import klite.HttpExchange
 import klite.MimeTypes
 import klite.Server
+import klite.Session
+import klite.SessionStore
 import klite.StatusCode.Companion.BadRequest
 import klite.StatusCode.Companion.OK
 import klite.StatusCode.Companion.Unauthorized
@@ -24,11 +27,15 @@ import java.net.http.HttpResponse.BodyHandlers
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 
 const val MARI = "mari.tamm@näide.ee"
 const val JURI = "jüri.kask@näide.ee"
 const val KATI = "kati.kask@näide.ee"
 const val LIIS = "liis.lepp@näide.ee"
+const val TOOMAS = "toomas.tamm@gmail.com"
+const val PEETER = "peeter.puu@pere.ee"
+const val ANNE = "anne.ots@haru.näide.ee"
 
 object App {
   init {
@@ -40,7 +47,7 @@ object App {
     Config["GOOGLE_TOKEN_URI"] = "${Google.url}/token"
     Config["GOOGLE_USER_INFO_URI"] = "${Google.url}/userinfo"
     Config["REDIRECT_URI"] = "https://fov.ee"
-    Config["ALLOWED_EMAILS"] = "jaan.kask@näide.ee, $MARI, $KATI, Liis.Lepp@näide.ee,"
+    Config["ALLOWED_EMAILS"] = "jaan.kask@näide.ee, $MARI, $KATI, Liis.Lepp@näide.ee, $TOOMAS, $PEETER, $ANNE,"
   }
 
   val server: Server = server()
@@ -59,11 +66,11 @@ object Google {
     context("/") {
       get("auth") {
         val scopes = query("scope").orEmpty().split(" ")
-        if (query("client_id") != "fov" || query("response_type") != "code" || "email" !in scopes || "profile" !in scopes || query("code_challenge_method") != "S256")
+        if (query("client_id") != "fov" || query("response_type") != "code" || scopes.first() != "openid" || "email" !in scopes || "profile" !in scopes || query("code_challenge_method") != "S256")
           throw BadRequestException("invalid_request")
         val code = UUID.randomUUID().toString().also { grants[it] = Grant(query("login_hint")!!, query("redirect_uri")!!, query("code_challenge")!!) }
         redirect(query("redirect_uri") + "?" + urlEncodeParams("state" to query("state"), "code" to code,
-          "scope" to "email profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
+          "scope" to "email profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile openid",
           "authuser" to 0, "prompt" to "consent"))
       }
       post("token") {
@@ -73,13 +80,14 @@ object Google {
           ?.takeIf { body<String>("grant_type") == "authorization_code" && body<String>("redirect_uri") == it.redirectUri && sha256(body("code_verifier")) == it.codeChallenge }?.email
           ?: return@post send(BadRequest, """{"error":"invalid_grant","error_description":"Bad Request"}""", MimeTypes.json)
         val token = UUID.randomUUID().toString().also { emailsByToken[it] = email }
-        send(OK, """{"access_token":"$token","expires_in":3599,"scope":"https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile","token_type":"Bearer"}""", MimeTypes.json)
+        send(OK, """{"access_token":"$token","expires_in":3599,"scope":"https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile openid","token_type":"Bearer","id_token":"eyJhbGciOiJSUzI1NiJ9.e30.c2lnbmF0dXJl"}""", MimeTypes.json)
       }
       get("userinfo") {
         val email = emailsByToken[header("Authorization")?.removePrefix("Bearer ")]
           ?: return@get send(Unauthorized, """{"error":"invalid_request","error_description":"Invalid Credentials"}""", MimeTypes.json)
         val (given, family) = email.substringBefore("@").split(".").map { n -> n.replaceFirstChar { it.uppercase() } }
-        send(OK, """{"sub":"${email.hashCode()}","name":"$given $family","given_name":"$given","family_name":"$family","picture":"https://lh3.googleusercontent.com/a/$given","email":"$email","email_verified":${email != KATI}}""", MimeTypes.json)
+        val hd = if (email.lowercase().endsWith("näide.ee")) ""","hd":"näide.ee"""" else ""
+        send(OK, """{"sub":"${email.hashCode()}","name":"$given $family","given_name":"$given","family_name":"$family","picture":"https://lh3.googleusercontent.com/a/$given","email":"$email","email_verified":${email != KATI}$hd}""", MimeTypes.json)
       }
     }
     start()
@@ -122,6 +130,17 @@ fun sessionTtl(cookie: String) = App.redis.ttl(sessionKey(cookie))
 fun rewriteSession(cookie: String, vararg values: Pair<String, Any>) {
   val key = sessionKey(cookie)
   App.redis.set(key, urlEncodeParams(urlDecodeParams(App.redis.get(key)) + values), SetParams().keepTtl())
+}
+
+class HeldSave(private val store: SessionStore) : SessionStore by store {
+  val saving = CountDownLatch(1)
+  val release = CountDownLatch(1)
+
+  override fun save(exchange: HttpExchange, session: Session) {
+    saving.countDown()
+    release.await()
+    store.save(exchange, session)
+  }
 }
 
 private fun sessionKey(cookie: String) = "auth:session:" + sha256(cookie.substringAfter("="))

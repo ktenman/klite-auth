@@ -5,6 +5,7 @@ import ch.tutteli.atrium.api.verbs.expect
 import klite.json.JsonMapper
 import klite.json.parse
 import klite.urlEncode
+import ee.tenman.auth.adapter.session.RedisSessions
 import ee.tenman.auth.adapter.web.loggable
 import ee.tenman.auth.adapter.web.requestLog
 import klite.RequestLogger
@@ -12,6 +13,8 @@ import org.junit.jupiter.api.Test
 import redis.clients.jedis.RedisClient
 import java.net.Socket
 import java.time.Instant
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit.SECONDS
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.minutes
 
@@ -95,12 +98,61 @@ class AppTest {
     expect(response.headers().allValues("Set-Cookie").map { it.substringBefore(";") }).toContainExactly("__Host-AUTHSESSION=")
   }
 
+  @Test fun `an allowed address Google isn't the authority for is turned away without a session`() {
+    expect(listOf(PEETER, ANNE).map { signIn(it) }).toHaveElementsAndAll {
+      its { location }.toEqual("/login?error")
+      its { headers().allValues("Set-Cookie").map { it.substringBefore(";") } }.toContainExactly("__Host-AUTHSESSION=")
+    }
+  }
+
+  @Test fun `a Gmail address signs in`() {
+    expect(get("/validate", "Cookie", signIn(TOOMAS).cookie).statusCode()).toEqual(200)
+  }
+
   @Test fun `signing in again from a signed-in session keeps the session's original expiry`() {
     val session = signIn(MARI).cookie
     rewriteSession(session, "expires" to Instant.now().epochSecond + 120)
     val again = startSignIn(null, "Cookie", session)
     expect(sessionTtl(again.cookie)).toBeGreaterThan(0).toBeLessThanOrEqualTo(120)
     expect(again.maxAge).toBeLessThanOrEqualTo(120)
+  }
+
+  @Test fun `a sign-in start from a signed-in session keeps the session's id`() {
+    val session = signIn(MARI).cookie
+    expect(List(3) { startSignIn(null, "Cookie", session).cookie }).toHaveElementsAndAll { toEqual(session) }
+  }
+
+  @Test fun `a sign-in start from another site leaves the session as it was`() {
+    val session = signIn(MARI).cookie
+    expect(listOf("cross-site", "same-site").map { startSignIn("/radio", "Cookie", session, "Sec-Fetch-Site", it) }).toHaveElementsAndAll {
+      its { statusCode() }.toEqual(403)
+      its { headers().allValues("Set-Cookie") }.toBeEmpty()
+    }
+    expect(get("/validate", "Cookie", session).statusCode()).toEqual(200)
+  }
+
+  @Test fun `a sign-in start from the login page, a bookmark or an older browser goes to Google`() {
+    expect(listOf(arrayOf("Sec-Fetch-Site", "same-origin"), arrayOf("Sec-Fetch-Site", "none"), arrayOf<String>()).map { startSignIn(null, *it).location })
+      .toHaveElementsAndAll { toStartWith(Google.url) }
+  }
+
+  @Test fun `a query longer than any the sign-in routes take is refused before it is read`() {
+    val repeated = "?" + "=&".repeat(32_000)
+    expect(listOf("/login", "/oauth2/authorization/google", "/login/oauth2/code/google").map { get(it + repeated) }).toHaveElementsAndAll {
+      its { statusCode() }.toEqual(414)
+      its { body() }.toContain("<p>414</p>").notToContain("null")
+    }
+  }
+
+  @Test fun `sign-in start takes the longest page to return to`() {
+    expect(startSignIn("/" + ":".repeat(2047)).location).toStartWith(Google.url)
+  }
+
+  @Test fun `signing in with Google from a signed-in session issues a new id`() {
+    val session = signIn(MARI).cookie
+    val renewed = signIn(MARI, null, "Cookie", session).cookie
+    expect(renewed).notToEqual(session)
+    expect(get("/validate", "Cookie", renewed).statusCode()).toEqual(200)
   }
 
   @Test fun `a sign-in started more than 10 minutes ago is turned away, even from a signed-in session`() {
@@ -186,11 +238,19 @@ class AppTest {
     expect(get("/validate", "Cookie", signIn(MARI).cookie, "Accept", "text/event-stream").statusCode()).toEqual(200)
   }
 
+  @Test fun `validate takes a protected page's long query`() {
+    expect(get("/validate?" + "id=1&".repeat(4000), "Cookie", signIn(MARI).cookie).statusCode()).toEqual(200)
+  }
+
   @Test fun `validate sends a visitor without a session to sign in, with the page they asked for`() {
     val response = get("/validate", "Accept", "application/json", "X-Forwarded-Uri", "/radio/2026-10-22-1200-sihik")
     expect(response.statusCode()).toEqual(302)
     expect(response.location).toEqual("/login?redirect=%2Fradio%2F2026-10-22-1200-sihik")
     expect(response.body()).toBeEmpty()
+  }
+
+  @Test fun `validate sends a visitor without a session to sign in without a page too long to return to`() {
+    expect(get("/validate", "X-Forwarded-Uri", "/radio?" + "id=1&".repeat(2000)).location).toEqual("/login")
   }
 
   @Test fun `validate sends a sign-in still in progress to the login page`() {
@@ -209,6 +269,25 @@ class AppTest {
     expect(response.location).toEqual("/")
     expect(response.headers().allValues("Set-Cookie")).toContainExactly { toContain("__Host-AUTHSESSION=; Max-Age=0") }
     expect(get("/validate", "Cookie", session).location).toEqual("/login")
+  }
+
+  @Test fun `signing out ends a session whose cookie was copied into a sign-in start`() {
+    val session = signIn(MARI).cookie
+    val copy = startSignIn(null, "Cookie", session).cookie
+    post("/logout", "Cookie", session)
+    expect(listOf(session, copy).map { get("/validate", "Cookie", it).location }).toHaveElementsAndAll { toEqual("/login") }
+  }
+
+  @Test fun `a sign-in start that overlaps a sign-out of the same session doesn't bring it back`() {
+    val session = signIn(MARI).cookie
+    val held = HeldSave(RedisSessions(App.redis))
+    val gate = App.start(server(sessions = held))
+    val start = CompletableFuture.supplyAsync { get("$gate/oauth2/authorization/google", "Cookie", session) }
+    expect(held.saving.await(5, SECONDS)).toEqual(true)
+    post("/logout", "Cookie", session)
+    held.release.countDown()
+    expect(start.get(5, SECONDS).headers().allValues("Set-Cookie")).toContainExactly { toContain("__Host-AUTHSESSION=; Max-Age=0") }
+    expect(sessionTtl(session)).toEqual(-2)
   }
 
   @Test fun `signing out from another site leaves the session signed in`() {

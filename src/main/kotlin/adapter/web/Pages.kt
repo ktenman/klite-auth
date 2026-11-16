@@ -13,7 +13,7 @@ object Pages {
     return loginTemplate.replace("<!--redirect-->", redirectInput.orEmpty())
   }
 
-  fun error(status: StatusCode) = errorTemplate.replace("<!--status-->", "<p>${status.reason}</p>\n        <p>${status.value}</p>")
+  fun error(status: StatusCode) = errorTemplate.replace("<!--status-->", "<p>${status.reason ?: "Error"}</p>\n        <p>${status.value}</p>")
 
   private fun load(name: String) = ClassLoader.getSystemResource("$name.html").readText()
 }

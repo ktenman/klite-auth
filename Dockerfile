@@ -4,7 +4,7 @@ COPY gradlew settings.gradle.kts build.gradle.kts ./
 COPY gradle gradle
 COPY src/main src/main
 RUN --mount=type=cache,target=/root/.gradle ./gradlew installDist --no-daemon
-RUN native-image -march=compatibility -O2 --initialize-at-build-time=klite.slf4j.Slf4jRedirectorCreator --initialize-at-run-time=jdk.internal.event.EventHelper -cp "build/install/klite-auth/lib/*" -o auth ee.tenman.auth.MainKt
+RUN native-image -march=compatibility -O2 -Dsun.net.httpserver.maxReqTime=10 --initialize-at-build-time=klite.slf4j.Slf4jRedirectorCreator --initialize-at-run-time=jdk.internal.event.EventHelper -cp "build/install/klite-auth/lib/*" -o auth ee.tenman.auth.MainKt
 
 FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* && useradd -r user
