@@ -178,9 +178,9 @@ CI pushes the image to GitHub Container Registry as `ghcr.io/ktenman/klite-auth:
 | | klite-auth (native image) | auth (Spring, native image) |
 |---|---|---|
 | Startup | 0.3 s | 0.8–0.9 s |
-| 27,000 requests | 2.0–2.1 s | 9.3–11.5 s |
+| 27,000 requests | 1.5–1.6 s | 9.3–11.5 s |
 | Memory after load (anon) | 11 MiB | 23 MiB |
-| Image | 49 MB | 73 MB |
+| Image | 52 MB | 73 MB |
 | Kotlin, main / test | 277 / 266 lines | 299 / 185 lines |
 
-Five runs each, on an Apple Silicon Mac, 2026-11-15.
+Five runs each, on an Apple Silicon Mac, 2026-11-15; klite-auth measured again with six runs on 2026-11-16.
