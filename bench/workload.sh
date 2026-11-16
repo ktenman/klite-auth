@@ -14,7 +14,6 @@ state() { header location | sed 's/.*[?&]state=\([^&]*\).*/\1/'; }
 login() {
   h=$(headers "$APP/oauth2/authorization/google?redirect=/radio/x")
   s=$(echo "$h" | session)
-  # Skips Google's sign-in page: the visitor comes back with a code and the attempt's state
   h=$(headers -H "Cookie: $COOKIE=$s" "$APP/login/oauth2/code/google?code=bench&state=$(echo "$h" | state)")
   [ "$(echo "$h" | header location)" = https://fov.ee/radio/x ] || fail "sign-in landed on '$(echo "$h" | header location)'"
   fresh=$(echo "$h" | session)

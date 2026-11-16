@@ -27,11 +27,8 @@ class RedisSessions(private val redis: RedisClient) : SessionStore {
   private fun store(session: Session, lifetime: Duration) =
     randomToken().also { redis.set(key(it), urlEncodeParams(session.params), SetParams().ex(lifetime.inWholeSeconds)) }
 
-  // Only a hash of the id is kept, so reading Redis doesn't reveal working session cookies
   private fun key(id: String) = "auth:session:" + id.sha256()
 
-  // Reads our cookie only: klite's exchange.cookie() decodes every cookie and fails on any malformed one.
-  // Trims just spaces and tabs (RFC 6265 5.2), so a name like "\u00a0__Host-AUTHSESSION" doesn't pass for ours
   private fun HttpExchange.sessionId() =
     header("Cookie")?.split(';')?.map { it.trim(' ', '\t') }?.lastOrNull { it.startsWith("$COOKIE=") }?.substringAfter('=')
 }

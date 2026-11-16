@@ -44,11 +44,10 @@ object App {
   }
 
   val server: Server = server()
-  val url = start { server }
+  val url = start(server)
   val redis = RedisClient.create(Config["REDIS_URL"])
 
-  // Takes a lambda, so that a test's own server is built only once the config above is set
-  fun start(server: () -> Server) = server().run { start(); "http://localhost:${address.port}" }
+  fun start(server: Server) = server.run { start(); "http://localhost:${address.port}" }
 }
 
 object Google {

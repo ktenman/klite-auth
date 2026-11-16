@@ -34,11 +34,11 @@ jobs:
           distribution: 'temurin'
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         if: matrix.language == 'java-kotlin'
-      - uses: github/codeql-action/init@v4
+      - name: Initialize CodeQL (nightly for Kotlin 2.4.21, which stable 2.27.4 doesn't support)
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          # Stable CodeQL 2.27.4 supports Kotlin up to 2.4.20; nightly handles 2.4.21
           tools: ${{ matrix.language == 'java-kotlin' && 'nightly' || 'linked' }}
           queries: security-and-quality
       - uses: github/codeql-action/analyze@v4

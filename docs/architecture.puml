@@ -1,5 +1,4 @@
 @startuml
-' Render with: plantuml -tsvg docs/architecture.puml
 !include <C4/C4_Container>
 
 Person(user, "User", "Visits the fov.ee sites")

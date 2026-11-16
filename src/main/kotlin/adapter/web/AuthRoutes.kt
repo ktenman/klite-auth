@@ -17,8 +17,6 @@ private val json = JsonMapper()
 fun Server.authRoutes(checkHealth: () -> Unit, google: GoogleAccounts, finishSignIn: FinishSignIn, allowed: Set<String>, site: String) {
   val siteOrigin = URI(site).let { "${it.scheme}://${it.authority}" }
 
-  // Errors get the HTML error page and redirects no body, whatever the request accepts. Routes must send() their
-  // own bodies, as nothing else renders: a value a route returns would go out as an empty 200 or a 406
   renderers.clear()
   renderers += ErrorPage
 
@@ -89,7 +87,6 @@ fun Server.authRoutes(checkHealth: () -> Unit, google: GoogleAccounts, finishSig
   }
 }
 
-// Queries and redirect targets carry OAuth codes and the addresses of protected pages, so neither is logged
 val requestLog: RequestLogFormatter = { ms ->
   val message = failure?.takeIf { it !is RedirectException }?.let { e -> if (e is StatusCodeException) e.message else e.toString() }
   ("$remoteAddress $method $path: $statusCode in $ms ms - $browser" + message?.let { " - $it" }.orEmpty()).loggable()
@@ -97,7 +94,6 @@ val requestLog: RequestLogFormatter = { ms ->
 
 private val controlChars = Regex("[\\p{Cc}\\u2028\\u2029]")
 
-// Request-controlled text must not start new log lines or send terminal escapes
 internal fun String.loggable() = replace(controlChars) { "\\u%04x".format(it.value[0].code) }
 
 private fun HttpExchange.allowedUser(allowed: Set<String>) =
