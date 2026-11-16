@@ -4,7 +4,7 @@ import ee.tenman.auth.domain.*
 import java.net.URI
 
 interface GoogleAccounts {
-  fun signInUrl(attempt: SignInAttempt, callbackUrl: String): URI
+  fun signInUrl(attempt: SignInAttempt): URI
 
-  fun userFor(code: String, attempt: SignInAttempt, callbackUrl: String): User
+  fun userFor(code: String, attempt: SignInAttempt): User
 }

@@ -5,8 +5,10 @@ import ch.tutteli.atrium.api.verbs.expect
 import klite.json.JsonMapper
 import klite.json.parse
 import klite.urlEncode
+import ee.tenman.auth.adapter.web.loggable
 import org.junit.jupiter.api.Test
 import redis.clients.jedis.RedisClient
+import java.time.Instant
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.minutes
 
@@ -80,13 +82,34 @@ class AppTest {
     val signedIn = signIn(MARI)
     expect(signedIn.cookie).notToEqual(signedIn.request().headers().firstValue("Cookie").get())
     expect(signedIn.headers().allValues("Set-Cookie"))
-      .toContainExactly { toContain("; Max-Age=2592000", "; Path=/", "; HttpOnly", "; Secure", "; SameSite=None") }
+      .toContainExactly { toContain("; Max-Age=2592000", "; Path=/", "; HttpOnly", "; Secure", "; SameSite=Lax") }
+  }
+
+  @Test fun `an allowed email that Google has not verified is turned away without a session`() {
+    val response = signIn(KATI)
+    expect(response.location).toEqual("/login?error")
+    expect(response.headers().allValues("Set-Cookie").map { it.substringBefore(";") }).toContainExactly("__Host-AUTHSESSION=")
+  }
+
+  @Test fun `signing in again from a signed-in session keeps the session's original expiry`() {
+    val session = signIn(MARI).cookie
+    rewriteSession(session, "expires" to Instant.now().epochSecond + 120)
+    val again = startSignIn(null, "Cookie", session)
+    expect(sessionTtl(again.cookie)).toBeGreaterThan(0).toBeLessThanOrEqualTo(120)
+    expect(again.headers().firstValue("Set-Cookie").get().substringAfter("Max-Age=").substringBefore(";").toLong()).toBeLessThanOrEqualTo(120)
+  }
+
+  @Test fun `a sign-in started more than 10 minutes ago is turned away, even from a signed-in session`() {
+    val start = startSignIn(null, "Cookie", signIn(MARI).cookie)
+    rewriteSession(start.cookie, "started" to Instant.now().epochSecond - 601)
+    val code = atGoogle(start, MARI).param("code")
+    expect(get("/login/oauth2/code/google?code=$code&state=${start.location.param("state")}", "Cookie", start.cookie).location).toEqual("/login?error")
   }
 
   @Test fun `an email not on the list is turned away without a session`() {
     val response = signIn(JURI)
     expect(response.statusCode()).toEqual(401)
-    expect(response.headers().allValues("Set-Cookie").map { it.substringBefore(";") }).toContainExactly("AUTHSESSION=")
+    expect(response.headers().allValues("Set-Cookie").map { it.substringBefore(";") }).toContainExactly("__Host-AUTHSESSION=")
   }
 
   @Test fun `a sign-in cancelled at Google returns to the login page`() {
@@ -124,10 +147,21 @@ class AppTest {
     expect(signIn(MARI, "/radio", *caddy).location).toEqual("https://fov.ee/radio")
   }
 
+  @Test fun `Google always sends the visitor back to the configured site, whatever the forwarded headers say`() {
+    val forged = arrayOf("X-Forwarded-Proto", "https://evil.example/#", "X-Forwarded-Host", "evil.example")
+    expect(startSignIn(null, *forged).location.param("redirect_uri")).toEqual("https://fov.ee/login/oauth2/code/google")
+  }
+
   @Test fun `validate names the signed-in user to Caddy`() {
     val response = get("/validate", "Cookie", signIn(MARI).cookie, "Accept", "application/json")
     expect(response.statusCode()).toEqual(200)
     expect(response.headers().firstValue("X-User-Id")).toBePresent().toEqual(MARI)
+  }
+
+  @Test fun `validate reads the session past a malformed cookie of another site's app`() {
+    val session = signIn(MARI).cookie
+    expect(listOf("pref=%u0161; $session", "$session; pref=100%").map { get("/validate", "Cookie", it).statusCode() })
+      .toHaveElementsAndAll { toEqual(200) }
   }
 
   @Test fun `validate accepts a signed-in session whose request accepts only event streams`() {
@@ -155,7 +189,23 @@ class AppTest {
     val session = signIn(MARI).cookie
     val response = post("/logout", "Cookie", session)
     expect(response.location).toEqual("/")
-    expect(response.headers().allValues("Set-Cookie")).toContainExactly { toContain("AUTHSESSION=; Max-Age=0") }
+    expect(response.headers().allValues("Set-Cookie")).toContainExactly { toContain("__Host-AUTHSESSION=; Max-Age=0") }
+    expect(get("/validate", "Cookie", session).location).toEqual("/login")
+  }
+
+  @Test fun `signing out from another site leaves the session signed in`() {
+    val session = signIn(MARI).cookie
+    val crossSite = listOf(arrayOf("Sec-Fetch-Site", "cross-site"), arrayOf("Sec-Fetch-Site", "same-site"), arrayOf("Origin", "https://evil.example"), arrayOf("Origin", "null"))
+    expect(crossSite.map { post("/logout", "Cookie", session, *it) }).toHaveElementsAndAll {
+      its { statusCode() }.toEqual(403)
+      its { headers().allValues("Set-Cookie") }.toBeEmpty()
+    }
+    expect(get("/validate", "Cookie", session).statusCode()).toEqual(200)
+  }
+
+  @Test fun `signing out from the site itself ends the session`() {
+    val session = signIn(MARI).cookie
+    expect(post("/logout", "Cookie", session, "Sec-Fetch-Site", "same-origin", "Origin", "https://fov.ee").location).toEqual("/")
     expect(get("/validate", "Cookie", session).location).toEqual("/login")
   }
 
@@ -169,6 +219,22 @@ class AppTest {
     val session = signIn(MARI).cookie
     expect(listOf("/", "/home").map { get(it, "Cookie", session).body() })
       .toHaveElementsAndAll { toContain("Success! You have successfully logged in.") }
+  }
+
+  @Test fun `the home page turns away a session whose email has left the list`() {
+    val session = signIn(MARI).cookie
+    expect(listOf("/", "/home").map { get("$withoutMari$it", "Cookie", session).statusCode() }).toHaveElementsAndAll { toEqual(401) }
+  }
+
+  @Test fun `pages can't be framed or have their type sniffed`() {
+    expect(get("/login").headers()) {
+      its { firstValue("Content-Security-Policy") }.toBePresent().toEqual("frame-ancestors 'none'")
+      its { firstValue("X-Content-Type-Options") }.toBePresent().toEqual("nosniff")
+    }
+  }
+
+  @Test fun `request log lines can't be split or carry terminal escapes`() {
+    expect("/x\r\nINFO forged\u001b[2J\u0085".loggable()).toEqual("/x\\u000d\\u000aINFO forged\\u001b[2J\\u0085")
   }
 
   @Test fun `a signed-out visitor is sent to sign in without a session`() {

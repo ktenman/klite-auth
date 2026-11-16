@@ -70,7 +70,8 @@ The application uses environment variables for configuration. Make sure to set t
 
 Optional:
 
-- `REDIS_URL`: Redis to keep sessions in, `redis://redis:6379` by default
+- `REDIS_URL`: Redis to keep sessions in, `redis://redis:6379` by default. Anything that can write to this Redis can
+  create sessions, so keep it on a network only this service reaches, or give it a password (`redis://:password@redis:6379`)
 - `PORT`: Port to listen on, 8083 in the Docker image
 - `GOOGLE_AUTHORIZATION_URI`, `GOOGLE_TOKEN_URI`, `GOOGLE_USER_INFO_URI`: Google's endpoints by default; the tests and
   `bench/run.sh` point them at a stand-in for Google
@@ -96,17 +97,20 @@ The application will start on port 8083.
 * `/oauth2/authorization/google`: Initiates Google OAuth2 authentication
 * `/login/oauth2/code/google`: Google's callback; returns the user to the page they came from
 * `/user`: Returns authenticated user information
-* `POST /logout`: Logs out the current user
-* `/` and `/home`: Page for signed-in users
+* `POST /logout`: Logs out the current user; refused with `403` when sent from another site
+* `/` and `/home`: Page for allowed signed-in users
 * `/actuator/health`: Health check, which also pings Redis
 
 ## Security Considerations
 
-- Only configured email addresses are allowed to authenticate, and removing one locks that user out at once
-- Sessions are stored in Redis under random 256-bit IDs, and signing in always issues a new one
+- Only configured email addresses that Google has verified are allowed to authenticate, and removing one locks that
+  user out at once
+- Sessions use random 256-bit IDs, of which Redis keeps only a hash, and signing in always issues a new one
+- A session lasts 30 days from signing in with Google; nothing else extends it
 - A sign-in attempt expires after 10 minutes and only accepts Google's answer with a matching `state` and PKCE verifier
 - After signing in, users return only to paths on the same site
-- Session cookies are `HttpOnly` and `Secure`
+- The session cookie `__Host-AUTHSESSION` is `HttpOnly`, `Secure` and `SameSite=Lax`
+- Request logs leave out OAuth codes and redirect targets, and escape control characters
 
 ## Development
 

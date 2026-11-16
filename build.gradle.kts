@@ -5,7 +5,10 @@ plugins {
 
 repositories {
 	mavenCentral()
-	maven("https://jitpack.io")
+	exclusiveContent {
+		forRepository { maven("https://jitpack.io") }
+		filter { includeGroup("com.github.keksworks.klite") }
+	}
 }
 
 dependencies {

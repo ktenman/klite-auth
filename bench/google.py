@@ -1,24 +1,16 @@
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlencode, urlparse
 
 USER = {"sub": "bench", "email": "bench@example.com", "name": "Bench User",
-        "given_name": "Bench", "family_name": "User", "picture": "https://example.com/bench.png"}
+        "given_name": "Bench", "family_name": "User", "picture": "https://example.com/bench.png",
+        "email_verified": True}
 
 
 class Google(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_GET(self):
-        url = urlparse(self.path)
-        if url.path == "/authorize":
-            q = parse_qs(url.query)
-            self.send_response(302)
-            self.send_header("Location", q["redirect_uri"][0] + "?" + urlencode({"code": "bench", "state": q["state"][0]}))
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-        else:
-            self.reply(USER)
+        self.reply(USER)
 
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length", 0)))

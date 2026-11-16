@@ -1,3 +1,7 @@
 .gradle/
 .kotlin/
 build/
+.env*
+*.pem
+*.key
+*.p12
