@@ -9,6 +9,8 @@ OAuth2 authentication using Google as the identity provider. It protects the fov
 `/validate` before every request, and only Google accounts listed in `ALLOWED_EMAILS` get through. It is a port of the
 Spring Boot [auth](https://github.com/ktenman/auth) service with the same endpoints, in half the memory.
 
+![Caddy asks klite-auth about each protected request; klite-auth signs users in with Google and keeps sessions in Redis](docs/architecture.svg)
+
 ```mermaid
 sequenceDiagram
     participant B as Browser
