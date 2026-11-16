@@ -1,0 +1,25 @@
+@startuml
+' Render with: plantuml -tsvg docs/architecture.puml
+!include <C4/C4_Container>
+
+Person(user, "User", "Visits the fov.ee sites")
+
+System_Boundary(fov, "fov.ee") {
+    Container(caddy, "Reverse Proxy", "Caddy", "Serves the sites over HTTPS")
+    Container(auth, "klite-auth", "Kotlin, Klite, native image", "Login page, Google sign-in and session checks")
+    ContainerDb(redis, "Session Store", "Redis", "Sessions and sign-in attempts")
+    Container(sites, "Protected Sites", "e.g. /radio", "Open only to allowed emails")
+}
+
+System_Ext(google, "Google OAuth2", "Signs users in")
+
+Rel(user, caddy, "Visits", "HTTPS")
+Rel(caddy, auth, "Checks each protected request", "GET /validate")
+Rel(caddy, auth, "Passes on login and logout", "/login, /logout")
+Rel(caddy, sites, "Forwards allowed requests")
+Rel(user, google, "Signs in", "HTTPS")
+Rel(auth, google, "Gets the user's email", "OAuth2, PKCE")
+Rel(auth, redis, "Stores sessions", "Redis protocol")
+
+SHOW_LEGEND()
+@enduml
