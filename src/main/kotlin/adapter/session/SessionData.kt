@@ -41,7 +41,6 @@ var Session.user: User?
     this["expires"] = user?.let { now() + userLifetime.inWholeSeconds }
   }
 
-// Each expiry counts from the sign-in or attempt that set it, so saving the session again never extends it
 val Session.lifetime: Duration
   get() = when {
     params.isEmpty() -> Duration.ZERO

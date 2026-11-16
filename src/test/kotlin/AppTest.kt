@@ -15,7 +15,7 @@ import java.time.Instant
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.minutes
 
-private val withoutMari by lazy { App.start { server(allowed = setOf("jaan.kask@näide.ee")) } }
+private val withoutMari by lazy { App.start(server(allowed = setOf("jaan.kask@näide.ee"))) }
 
 class AppTest {
   @Test fun `health is up while Redis answers`() {
@@ -25,7 +25,7 @@ class AppTest {
   }
 
   @Test fun `health fails while Redis is unreachable`() {
-    val down = App.start { server(RedisClient.create("redis://localhost:1")) }
+    val down = App.start(server(RedisClient.create("redis://localhost:1")))
     expect(get("$down/actuator/health").statusCode()).toEqual(500)
   }
 
@@ -175,7 +175,6 @@ class AppTest {
 
   @Test fun `validate takes the session only from a cookie named exactly ours`() {
     val cookie = "\u00a0" + signIn(MARI).cookie
-    // Over a raw socket, because Java's HttpClient won't send the 0xA0 byte that a browser might pass on
     val status = Socket("localhost", App.server.address.port).use {
       it.getOutputStream().write("GET /validate HTTP/1.1\r\nHost: localhost\r\nCookie: $cookie\r\nConnection: close\r\n\r\n".toByteArray(Charsets.ISO_8859_1))
       it.getInputStream().bufferedReader().readLine()
