@@ -16,6 +16,7 @@ fun main() {
 fun server(
   redis: RedisClient = RedisClient.create(Config.optional("REDIS_URL", "redis://redis:6379")),
   allowed: Set<String> = Config["ALLOWED_EMAILS"].split(",").mapNotNull { it.trimToNull()?.lowercase() }.toSet(),
+  sessions: SessionStore = RedisSessions(redis),
 ): Server {
   val site = Config["REDIRECT_URI"]
   val google = GoogleClient(
@@ -24,9 +25,9 @@ fun server(
     callbackUrl = site.removeSuffix("/") + "/login/oauth2/code/google",
     authorizationUri = URI(Config.optional("GOOGLE_AUTHORIZATION_URI", "https://accounts.google.com/o/oauth2/v2/auth")),
     tokenUri = URI(Config.optional("GOOGLE_TOKEN_URI", "https://www.googleapis.com/oauth2/v4/token")),
-    userInfoUri = URI(Config.optional("GOOGLE_USER_INFO_URI", "https://www.googleapis.com/oauth2/v3/userinfo")),
+    userInfoUri = URI(Config.optional("GOOGLE_USER_INFO_URI", "https://openidconnect.googleapis.com/v1/userinfo")),
   )
-  return Server(httpExchangeCreator = ::XForwardedHttpExchange, sessionStore = RedisSessions(redis), decorators = listOf(RequestLogger(requestLog))).apply {
+  return Server(httpExchangeCreator = ::XForwardedHttpExchange, sessionStore = sessions, decorators = listOf(RequestLogger(requestLog))).apply {
     authRoutes(
       checkHealth = { redis.ping() },
       google = google,

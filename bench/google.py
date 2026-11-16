@@ -3,7 +3,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 USER = {"sub": "bench", "email": "bench@example.com", "name": "Bench User",
         "given_name": "Bench", "family_name": "User", "picture": "https://example.com/bench.png",
-        "email_verified": True}
+        "email_verified": True, "hd": "example.com"}
 
 
 class Google(BaseHTTPRequestHandler):
@@ -14,7 +14,7 @@ class Google(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        self.reply({"access_token": "bench", "token_type": "Bearer", "expires_in": 3600, "scope": "email profile"})
+        self.reply({"access_token": "bench", "token_type": "Bearer", "expires_in": 3600, "scope": "openid email profile"})
 
     def reply(self, body):
         data = json.dumps(body).encode()

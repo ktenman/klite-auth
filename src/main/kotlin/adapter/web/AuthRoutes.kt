@@ -32,17 +32,18 @@ fun Server.authRoutes(checkHealth: () -> Unit, google: GoogleAccounts, finishSig
     }
 
     get("login") {
-      send(OK, Pages.login(query("redirect")), MimeTypes.html)
+      send(OK, Pages.login(param("redirect")), MimeTypes.html)
     }
 
     get("oauth2/authorization/google") {
-      val attempt = SignInAttempt.start(ReturnPath.of(query("redirect")))
+      if (header("Sec-Fetch-Site") in listOf("cross-site", "same-site")) throw ForbiddenException("Cross-site sign-in start")
+      val attempt = SignInAttempt.start(ReturnPath.of(param("redirect")))
       session.signInAttempt = attempt
       redirect(google.signInUrl(attempt))
     }
 
     get("login/oauth2/code/google") {
-      val outcome = finishSignIn(session.signInAttempt, query("state"), query("code"))
+      val outcome = finishSignIn(session.signInAttempt, param("state"), param("code"))
       if (outcome != UnknownCallback) session.clear()
       when (outcome) {
         UnknownCallback -> redirect("/login?error")
@@ -100,4 +101,9 @@ private fun HttpExchange.allowedUser(allowed: Set<String>) =
   signedInUser().also { if (it.email !in allowed) throw UnauthorizedException("No longer allowed: ${it.email}") }
 
 private fun HttpExchange.signedInUser() =
-  session.user ?: redirect("/login" + header("X-Forwarded-Uri")?.let { "?redirect=" + it.urlEncode() }.orEmpty())
+  session.user ?: redirect("/login" + ReturnPath.of(header("X-Forwarded-Uri"))?.let { "?redirect=" + it.path.urlEncode() }.orEmpty())
+
+private fun HttpExchange.param(name: String): String? {
+  if (query.length > 8192) throw StatusCodeException(StatusCode(414))
+  return query(name)
+}

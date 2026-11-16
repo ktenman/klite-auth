@@ -16,13 +16,14 @@ a line of sign-in code in any of them.
 
 - **Apps stay simple.** Caddy asks klite-auth before every request, so a protected app never sees a signed-out visitor,
   and it gets the signed-in email in `X-User-Id`. Protecting another app is one line in the Caddyfile.
-- **One list decides who gets in.** Only addresses in `ALLOWED_EMAILS` that Google has verified get through. The list
-  is checked on every request, not only at sign-in, so removing an address locks that person out on their next request.
+- **One list decides who gets in.** Only addresses in `ALLOWED_EMAILS` that Google has verified get through, and each
+  must be a Gmail address or on the primary domain of its Google Workspace organization. The list is checked on every
+  request, not only at sign-in, so removing an address locks that person out on their next request.
 - **Fast and light.** As a native image it starts in 0.3 s, answers 27,000 requests in 1.6 s on 2 CPUs and uses 11 MiB
   of memory: six times faster than the Spring Boot service it replaced, in half the memory.
 - **Secure by default.** PKCE and `state` on every sign-in, a `__Host-` cookie, session IDs that Redis only ever sees
-  hashed, a hard 30-day limit on sessions, return paths that can't leave the site, sign-out that other sites can't
-  trigger, and no OAuth codes in the logs. There is nothing to tune.
+  hashed, a hard 30-day limit on sessions, return paths that can't leave the site, sign-in starts and sign-outs that
+  other sites can't trigger, and no OAuth codes in the logs. There is nothing to tune.
 - **Small enough to read in one sitting.** About 300 lines of Kotlin on just Klite and Jedis, four environment variables
   to set, and tests that run it end to end against a stand-in Google and a real Redis.
 
@@ -87,12 +88,14 @@ The application uses environment variables for configuration. Make sure to set t
 - `GOOGLE_CLIENT_ID`: Your Google OAuth2 client ID
 - `GOOGLE_CLIENT_SECRET`: Your Google OAuth2 client secret; the client's redirect URI is `<REDIRECT_URI>/login/oauth2/code/google`
 - `REDIRECT_URI`: The URI to redirect after successful authentication, e.g. `https://fov.ee`
-- `ALLOWED_EMAILS`: Comma-separated list of email addresses allowed to authenticate, matched whatever their case
+- `ALLOWED_EMAILS`: Comma-separated list of email addresses allowed to authenticate, matched whatever their case. Each
+  must be a Gmail address or on the primary domain of its Google Workspace organization
 
 Optional:
 
 - `REDIS_URL`: Redis to keep sessions in, `redis://redis:6379` by default. Anything that can write to this Redis can
-  create sessions, so keep it on a network only this service reaches, or give it a password (`redis://:password@redis:6379`).
+  create sessions, so keep it on a network only this service reaches, or give the Redis server a password (`requirepass`
+  or an ACL): a URL with a password (`redis://:password@redis:6379`) also connects to a Redis that asks for none.
   Every visit to `/oauth2/authorization/google` stores a sign-in attempt in it for 10 minutes, before anyone has signed
   in, so give the service a Redis of its own with capped memory: with `--maxmemory 32mb --maxmemory-policy volatile-ttl`,
   a flood of such visits evicts the short-lived attempts before the sessions
@@ -118,7 +121,7 @@ The application will start on port 8083.
 * `/validate`: `200` with `X-User-Id: <email>`, in lowercase, for an allowed user, `302` to
   `/login?redirect=<X-Forwarded-Uri>` when signed out, and `401` once the email is no longer allowed
 * `/login`: Login page
-* `/oauth2/authorization/google`: Initiates Google OAuth2 authentication
+* `/oauth2/authorization/google`: Initiates Google OAuth2 authentication; refused with `403` when sent from another site
 * `/login/oauth2/code/google`: Google's callback; returns the user to the page they came from
 * `/user`: Returns authenticated user information
 * `POST /logout`: Logs out the current user; refused with `403` when sent from another site
@@ -127,8 +130,8 @@ The application will start on port 8083.
 
 ## Security Considerations
 
-- Only configured email addresses that Google has verified are allowed to authenticate, and removing one locks that
-  user out at once
+- Only configured email addresses that Google has verified are allowed to authenticate, and each must be a Gmail
+  address or on the primary domain of its Google Workspace organization. Removing one locks that user out at once
 - Sessions use random 256-bit IDs, of which Redis keeps only a hash, and signing in always issues a new one
 - A session lasts 30 days from signing in with Google; nothing else extends it
 - A sign-in attempt expires after 10 minutes and only accepts Google's answer with a matching `state` and PKCE verifier
@@ -159,7 +162,7 @@ src/main/kotlin
 Dependencies point inward: adapters use the use cases, and the use cases use the domain. The domain and use cases import
 nothing from Klite, Redis or HTTP.
 
-Dependabot opens monthly updates for Gradle, GitHub Actions and the Docker base images; pull requests only run the tests, and minor and patch updates merge themselves once they pass.
+Dependabot opens monthly updates for Gradle, GitHub Actions and the Docker base images; pull requests only run the tests, and Gradle and Docker minor and patch updates merge themselves once they pass. GitHub Actions updates wait for a review, because the workflow runs them with write tokens. Klite's jars are pinned by hash in `gradle/verification-metadata.xml`, so a Klite update fails until someone reruns `./gradlew --write-verification-metadata sha256 installDist compileTestKotlin` and checks that JitPack's build log for the new version names the commit the Klite tag points to.
 
 ## Testing
 
@@ -189,7 +192,7 @@ The application includes a Dockerfile that builds a GraalVM native image. To bui
 
 2. Run the Docker container:
    ```bash
-   docker run -p 8083:8083 -e GOOGLE_CLIENT_ID=your_client_id -e GOOGLE_CLIENT_SECRET=your_client_secret -e REDIRECT_URI=your_redirect_uri -e ALLOWED_EMAILS=allowed@email.com klite-auth
+   docker run -p 127.0.0.1:8083:8083 -e GOOGLE_CLIENT_ID=your_client_id -e GOOGLE_CLIENT_SECRET=your_client_secret -e REDIRECT_URI=your_redirect_uri -e ALLOWED_EMAILS=allowed@email.com klite-auth
    ```
    The container expects Redis at the host name `redis`; set `REDIS_URL` to use another one.
 
@@ -205,6 +208,6 @@ CI pushes the image to GitHub Container Registry as `ghcr.io/ktenman/klite-auth:
 | 27,000 requests | 1.5–1.6 s | 9.3–11.5 s |
 | Memory after load (anon) | 11 MiB | 23 MiB |
 | Image | 52 MB | 73 MB |
-| Kotlin, main / test | 313 / 355 non-blank lines | 299 / 185 non-blank lines |
+| Kotlin, main / test | 318 / 437 non-blank lines | 299 / 185 non-blank lines |
 
 Five runs each, on an Apple Silicon Mac, 2026-11-15; klite-auth measured again with six runs on 2026-11-16.

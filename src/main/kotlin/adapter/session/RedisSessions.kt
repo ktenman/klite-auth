@@ -18,10 +18,15 @@ class RedisSessions(private val redis: RedisClient) : SessionStore {
 
   override fun save(exchange: HttpExchange, session: Session) {
     if (!session.changed) return
-    exchange.sessionId()?.let { redis.del(key(it)) }
+    val presented = exchange.sessionId()
     val lifetime = session.lifetime
-    val id = if (lifetime == Duration.ZERO) "" else store(session, lifetime)
-    exchange += Cookie(COOKIE, id, maxAge = lifetime, httpOnly = true, secure = true, sameSite = SameSite.Lax)
+    if (session.isNew || lifetime == Duration.ZERO) presented?.let { redis.del(key(it)) }
+    val id = when {
+      lifetime == Duration.ZERO -> ""
+      session.isNew -> store(session, lifetime)
+      else -> presented?.takeIf { redis.set(key(it), urlEncodeParams(session.params), SetParams().xx().ex(lifetime.inWholeSeconds)) != null }.orEmpty()
+    }
+    exchange += Cookie(COOKIE, id, maxAge = if (id.isEmpty()) Duration.ZERO else lifetime, httpOnly = true, secure = true, sameSite = SameSite.Lax)
   }
 
   private fun store(session: Session, lifetime: Duration) =
