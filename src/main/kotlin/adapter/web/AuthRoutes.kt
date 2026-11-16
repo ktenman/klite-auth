@@ -3,6 +3,7 @@ package ee.tenman.auth.adapter.web
 import ee.tenman.auth.adapter.session.signInAttempt
 import ee.tenman.auth.adapter.session.user
 import ee.tenman.auth.domain.ReturnPath
+import ee.tenman.auth.domain.SignInAttempt
 import ee.tenman.auth.usecase.*
 import ee.tenman.auth.usecase.FinishSignIn.*
 import klite.*
@@ -13,9 +14,11 @@ import java.net.URI
 private val log = logger("auth")
 private val json = JsonMapper()
 
-fun Server.authRoutes(checkHealth: () -> Unit, startSignIn: StartSignIn, finishSignIn: FinishSignIn, allowed: Set<String>, site: String) {
+fun Server.authRoutes(checkHealth: () -> Unit, google: GoogleAccounts, finishSignIn: FinishSignIn, allowed: Set<String>, site: String) {
   val siteOrigin = URI(site).let { "${it.scheme}://${it.authority}" }
 
+  // Errors get the HTML error page and redirects no body, whatever the request accepts. Routes must send() their
+  // own bodies, as nothing else renders: a value a route returns would go out as an empty 200 or a 406
   renderers.clear()
   renderers += ErrorPage
 
@@ -35,9 +38,9 @@ fun Server.authRoutes(checkHealth: () -> Unit, startSignIn: StartSignIn, finishS
     }
 
     get("oauth2/authorization/google") {
-      val started = startSignIn(ReturnPath.of(query("redirect")))
-      session.signInAttempt = started.attempt
-      redirect(started.googleUrl)
+      val attempt = SignInAttempt.start(ReturnPath.of(query("redirect")))
+      session.signInAttempt = attempt
+      redirect(google.signInUrl(attempt))
     }
 
     get("login/oauth2/code/google") {

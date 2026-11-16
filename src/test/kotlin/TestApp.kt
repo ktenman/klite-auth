@@ -28,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap
 const val MARI = "mari.tamm@näide.ee"
 const val JURI = "jüri.kask@näide.ee"
 const val KATI = "kati.kask@näide.ee"
+const val LIIS = "liis.lepp@näide.ee"
 
 object App {
   init {
@@ -39,14 +40,15 @@ object App {
     Config["GOOGLE_TOKEN_URI"] = "${Google.url}/token"
     Config["GOOGLE_USER_INFO_URI"] = "${Google.url}/userinfo"
     Config["REDIRECT_URI"] = "https://fov.ee"
-    Config["ALLOWED_EMAILS"] = "jaan.kask@näide.ee, $MARI, $KATI,"
+    Config["ALLOWED_EMAILS"] = "jaan.kask@näide.ee, $MARI, $KATI, Liis.Lepp@näide.ee,"
   }
 
   val server: Server = server()
-  val url = start(server)
+  val url = start { server }
   val redis = RedisClient.create(Config["REDIS_URL"])
 
-  fun start(server: Server) = server.run { start(); "http://localhost:${address.port}" }
+  // Takes a lambda, so that a test's own server is built only once the config above is set
+  fun start(server: () -> Server) = server().run { start(); "http://localhost:${address.port}" }
 }
 
 object Google {

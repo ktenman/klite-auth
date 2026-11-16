@@ -15,7 +15,7 @@ fun main() {
 
 fun server(
   redis: RedisClient = RedisClient.create(Config.optional("REDIS_URL", "redis://redis:6379")),
-  allowed: Set<String> = Config["ALLOWED_EMAILS"].split(",").mapNotNull { it.trimToNull() }.toSet(),
+  allowed: Set<String> = Config["ALLOWED_EMAILS"].split(",").mapNotNull { it.trimToNull()?.lowercase() }.toSet(),
 ): Server {
   val site = Config["REDIRECT_URI"]
   val google = GoogleClient(
@@ -29,7 +29,7 @@ fun server(
   return Server(httpExchangeCreator = ::XForwardedHttpExchange, sessionStore = RedisSessions(redis), decorators = listOf(RequestLogger(requestLog))).apply {
     authRoutes(
       checkHealth = { redis.ping() },
-      startSignIn = StartSignIn(google),
+      google = google,
       finishSignIn = FinishSignIn(google, allowed, site),
       allowed = allowed,
       site = site,

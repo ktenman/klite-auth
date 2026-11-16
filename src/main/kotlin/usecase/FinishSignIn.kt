@@ -11,7 +11,7 @@ class FinishSignIn(private val google: GoogleAccounts, private val allowed: Set<
 
   operator fun invoke(attempt: SignInAttempt?, callbackState: String?, code: String?): Outcome {
     if (attempt == null || code == null || callbackState != attempt.state) return UnknownCallback
-    val user = runCatching { google.userFor(code, attempt) }.getOrElse { return GoogleFailed(it) }
+    val user = try { google.userFor(code, attempt) } catch (e: Exception) { return GoogleFailed(e) }
     if (user.email !in allowed) return NotAllowed(user.email)
     return SignedIn(user, destination = attempt.returnPath?.on(site) ?: site)
   }
