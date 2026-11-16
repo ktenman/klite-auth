@@ -68,12 +68,15 @@ The application uses environment variables for configuration. Make sure to set t
 - `GOOGLE_CLIENT_ID`: Your Google OAuth2 client ID
 - `GOOGLE_CLIENT_SECRET`: Your Google OAuth2 client secret; the client's redirect URI is `<REDIRECT_URI>/login/oauth2/code/google`
 - `REDIRECT_URI`: The URI to redirect after successful authentication, e.g. `https://fov.ee`
-- `ALLOWED_EMAILS`: Comma-separated list of email addresses allowed to authenticate
+- `ALLOWED_EMAILS`: Comma-separated list of email addresses allowed to authenticate, matched whatever their case
 
 Optional:
 
 - `REDIS_URL`: Redis to keep sessions in, `redis://redis:6379` by default. Anything that can write to this Redis can
-  create sessions, so keep it on a network only this service reaches, or give it a password (`redis://:password@redis:6379`)
+  create sessions, so keep it on a network only this service reaches, or give it a password (`redis://:password@redis:6379`).
+  Every visit to `/oauth2/authorization/google` stores a sign-in attempt in it for 10 minutes, before anyone has signed
+  in, so give the service a Redis of its own with capped memory: with `--maxmemory 32mb --maxmemory-policy volatile-ttl`,
+  a flood of such visits evicts the short-lived attempts before the sessions
 - `PORT`: Port to listen on, 8083 in the Docker image
 - `GOOGLE_AUTHORIZATION_URI`, `GOOGLE_TOKEN_URI`, `GOOGLE_USER_INFO_URI`: Google's endpoints by default; the tests and
   `bench/run.sh` point them at a stand-in for Google
@@ -93,8 +96,8 @@ The application will start on port 8083.
 
 ## API Endpoints
 
-* `/validate`: `200` with `X-User-Id: <email>` for an allowed user, `302` to `/login?redirect=<X-Forwarded-Uri>` when
-  signed out, and `401` once the email is no longer allowed
+* `/validate`: `200` with `X-User-Id: <email>`, in lowercase, for an allowed user, `302` to
+  `/login?redirect=<X-Forwarded-Uri>` when signed out, and `401` once the email is no longer allowed
 * `/login`: Login page
 * `/oauth2/authorization/google`: Initiates Google OAuth2 authentication
 * `/login/oauth2/code/google`: Google's callback; returns the user to the page they came from
@@ -127,7 +130,7 @@ To set up the development environment:
 src/main/kotlin
 ├── Main.kt                 wiring and configuration
 ├── domain/                 ReturnPath, SignInAttempt, User, randomToken; JDK only
-├── usecase/                StartSignIn, FinishSignIn and the GoogleAccounts port
+├── usecase/                FinishSignIn and the GoogleAccounts port
 └── adapter/
     ├── web/                routes, HTML pages, error page
     ├── session/            session contents and lifetime, Redis store
@@ -183,6 +186,6 @@ CI pushes the image to GitHub Container Registry as `ghcr.io/ktenman/klite-auth:
 | 27,000 requests | 1.5–1.6 s | 9.3–11.5 s |
 | Memory after load (anon) | 11 MiB | 23 MiB |
 | Image | 52 MB | 73 MB |
-| Kotlin, main / test | 277 / 266 lines | 299 / 185 lines |
+| Kotlin, main / test | 313 / 355 non-blank lines | 299 / 185 non-blank lines |
 
 Five runs each, on an Apple Silicon Mac, 2026-11-15; klite-auth measured again with six runs on 2026-11-16.

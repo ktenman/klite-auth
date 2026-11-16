@@ -6,6 +6,7 @@ import klite.*
 import klite.http.*
 import klite.json.*
 import java.net.URI
+import kotlin.time.Duration.Companion.seconds
 
 class GoogleClient(
   private val clientId: String,
@@ -37,10 +38,11 @@ class GoogleClient(
       "client_secret" to clientSecret,
       "code_verifier" to attempt.codeVerifier,
     )
-    val token = json.parse<Token>(http.post(tokenUri, form) { contentType(MimeTypes.wwwForm) }.bodyOrThrow())
-    val userInfo = http.get(userInfoUri) { authBearer(token.accessToken) }.bodyOrThrow()
+    val token = json.parse<Token>(http.post(tokenUri, form) { contentType(MimeTypes.wwwForm); timeout(10.seconds) }.bodyOrThrow())
+    val userInfo = http.get(userInfoUri) { authBearer(token.accessToken); timeout(10.seconds) }.bodyOrThrow()
     check(json.parse<Verification>(userInfo).emailVerified) { "Google has not verified the account's email" }
-    return json.parse(userInfo)
+    // Lowercased like ALLOWED_EMAILS, so the allowlist matches whatever case either side uses
+    return json.parse<User>(userInfo).run { copy(email = email.lowercase()) }
   }
 
   class Token(val accessToken: String)
