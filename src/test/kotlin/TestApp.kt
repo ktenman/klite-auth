@@ -10,8 +10,10 @@ import klite.StatusCode.Companion.Unauthorized
 import klite.base64UrlEncode
 import klite.queryParams
 import klite.urlEncode
+import klite.urlDecodeParams
 import klite.urlEncodeParams
 import redis.clients.jedis.RedisClient
+import redis.clients.jedis.params.SetParams
 import java.net.InetSocketAddress
 import java.net.URI
 import java.net.http.HttpClient
@@ -25,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 const val MARI = "mari.tamm@näide.ee"
 const val JURI = "jüri.kask@näide.ee"
+const val KATI = "kati.kask@näide.ee"
 
 object App {
   init {
@@ -36,7 +39,7 @@ object App {
     Config["GOOGLE_TOKEN_URI"] = "${Google.url}/token"
     Config["GOOGLE_USER_INFO_URI"] = "${Google.url}/userinfo"
     Config["REDIRECT_URI"] = "https://fov.ee"
-    Config["ALLOWED_EMAILS"] = "jaan.kask@näide.ee, $MARI"
+    Config["ALLOWED_EMAILS"] = "jaan.kask@näide.ee, $MARI, $KATI,"
   }
 
   val url = start(server())
@@ -74,7 +77,7 @@ object Google {
         val email = emailsByToken[header("Authorization")?.removePrefix("Bearer ")]
           ?: return@get send(Unauthorized, """{"error":"invalid_request","error_description":"Invalid Credentials"}""", MimeTypes.json)
         val (given, family) = email.substringBefore("@").split(".").map { n -> n.replaceFirstChar { it.uppercase() } }
-        send(OK, """{"sub":"${email.hashCode()}","name":"$given $family","given_name":"$given","family_name":"$family","picture":"https://lh3.googleusercontent.com/a/$given","email":"$email","email_verified":true}""", MimeTypes.json)
+        send(OK, """{"sub":"${email.hashCode()}","name":"$given $family","given_name":"$given","family_name":"$family","picture":"https://lh3.googleusercontent.com/a/$given","email":"$email","email_verified":${email != KATI}}""", MimeTypes.json)
       }
     }
     start()
@@ -104,11 +107,18 @@ val HttpResponse<*>.location: String get() =
   headers().firstValue("Location").orElseThrow { AssertionError("no Location in ${statusCode()} ${body()}") }
 
 val HttpResponse<*>.cookie: String get() =
-  headers().allValues("Set-Cookie").firstOrNull { it.startsWith("AUTHSESSION=") }?.substringBefore(";")
+  headers().allValues("Set-Cookie").firstOrNull { it.startsWith("__Host-AUTHSESSION=") }?.substringBefore(";")
     ?: throw AssertionError("no session cookie in ${statusCode()} ${headers()}")
 
 fun String.param(name: String) = URI(this).queryParams[name]
 
-fun sessionTtl(cookie: String) = App.redis.ttl("auth:session:" + cookie.substringAfter("="))
+fun sessionTtl(cookie: String) = App.redis.ttl(sessionKey(cookie))
+
+fun rewriteSession(cookie: String, vararg values: Pair<String, Any>) {
+  val key = sessionKey(cookie)
+  App.redis.set(key, urlEncodeParams(urlDecodeParams(App.redis.get(key)) + values), SetParams().keepTtl())
+}
+
+private fun sessionKey(cookie: String) = "auth:session:" + sha256(cookie.substringAfter("="))
 
 private fun sha256(text: String) = MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).base64UrlEncode()

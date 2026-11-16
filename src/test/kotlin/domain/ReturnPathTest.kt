@@ -10,7 +10,7 @@ class ReturnPathTest {
   }
 
   @Test fun `anything that could leave the site or break the redirect is dropped`() {
-    val unsafe = listOf(null, "", "radio", "//evil.example", "https://evil.example", "@evil.example", "/radio\r\nSet-Cookie: x=1", "/" + "a".repeat(2048))
+    val unsafe = listOf(null, "", "radio", "//evil.example", "https://evil.example", "@evil.example", "/radio\r\nSet-Cookie: x=1", "/radio/\u0161", "/radio/\ufffd", "/" + "a".repeat(2048))
     expect(unsafe.mapNotNull { ReturnPath.of(it) }).toBeEmpty()
   }
 }

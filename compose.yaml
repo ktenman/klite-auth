@@ -2,4 +2,4 @@ services:
   redis:
     image: redis:8-alpine
     ports:
-      - 6380:6379
+      - 127.0.0.1:6380:6379

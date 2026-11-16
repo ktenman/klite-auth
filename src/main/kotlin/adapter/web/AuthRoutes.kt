@@ -8,13 +8,21 @@ import ee.tenman.auth.usecase.FinishSignIn.*
 import klite.*
 import klite.StatusCode.Companion.OK
 import klite.json.JsonMapper
+import java.net.URI
 
 private val log = logger("auth")
 private val json = JsonMapper()
 
-fun Server.authRoutes(checkHealth: () -> Unit, startSignIn: StartSignIn, finishSignIn: FinishSignIn, allowed: Set<String>) {
+fun Server.authRoutes(checkHealth: () -> Unit, startSignIn: StartSignIn, finishSignIn: FinishSignIn, allowed: Set<String>, site: String) {
+  val siteOrigin = URI(site).let { "${it.scheme}://${it.authority}" }
+
   renderers.clear()
   renderers += ErrorPage
+
+  before {
+    it.header("Content-Security-Policy", "frame-ancestors 'none'")
+    it.header("X-Content-Type-Options", "nosniff")
+  }
 
   context("/") {
     get("actuator/health") {
@@ -27,18 +35,18 @@ fun Server.authRoutes(checkHealth: () -> Unit, startSignIn: StartSignIn, finishS
     }
 
     get("oauth2/authorization/google") {
-      val started = startSignIn(ReturnPath.of(query("redirect")), callbackUrl())
+      val started = startSignIn(ReturnPath.of(query("redirect")))
       session.signInAttempt = started.attempt
       redirect(started.googleUrl)
     }
 
     get("login/oauth2/code/google") {
-      val outcome = finishSignIn(session.signInAttempt, query("state"), query("code"), callbackUrl())
+      val outcome = finishSignIn(session.signInAttempt, query("state"), query("code"))
       if (outcome != UnknownCallback) session.clear()
       when (outcome) {
         UnknownCallback -> redirect("/login?error")
         is GoogleFailed -> {
-          log.warn("Google sign-in failed: ${outcome.cause}")
+          log.warn("Google sign-in failed: ${outcome.cause}".loggable())
           redirect("/login?error")
         }
         is NotAllowed -> throw UnauthorizedException("Not allowed to sign in: ${outcome.email}")
@@ -50,20 +58,21 @@ fun Server.authRoutes(checkHealth: () -> Unit, startSignIn: StartSignIn, finishS
     }
 
     get("validate") {
-      val user = signedInUser()
-      if (user.email !in allowed) throw UnauthorizedException("No longer allowed: ${user.email}")
+      val user = allowedUser(allowed)
       header("X-User-Id", user.email)
       send(OK, """{"message":"Session validated successfully"}""", MimeTypes.json)
     }
 
     post("logout") {
+      val crossSite = header("Sec-Fetch-Site")?.let { it != "same-origin" } ?: header("Origin").let { it != null && it != siteOrigin }
+      if (crossSite) throw ForbiddenException("Cross-site sign-out")
       session.clear()
       redirect("/")
     }
 
     for (path in listOf("", "home")) {
       get(path) {
-        signedInUser()
+        allowedUser(allowed)
         send(OK, Pages.home, MimeTypes.html)
       }
     }
@@ -77,7 +86,19 @@ fun Server.authRoutes(checkHealth: () -> Unit, startSignIn: StartSignIn, finishS
   }
 }
 
-private fun HttpExchange.callbackUrl() = fullUrl("/login/oauth2/code/google").toString()
+// Queries and redirect targets carry OAuth codes and the addresses of protected pages, so neither is logged
+val requestLog: RequestLogFormatter = { ms ->
+  val message = failure?.takeIf { it !is RedirectException }?.let { e -> if (e is StatusCodeException) e.message else e.toString() }
+  ("$remoteAddress $method $path: $statusCode in $ms ms - $browser" + message?.let { " - $it" }.orEmpty()).loggable()
+}
+
+private val controlChars = Regex("[\\p{Cc}\\u2028\\u2029]")
+
+// Request-controlled text must not start new log lines or send terminal escapes
+internal fun String.loggable() = replace(controlChars) { "\\u%04x".format(it.value[0].code) }
+
+private fun HttpExchange.allowedUser(allowed: Set<String>) =
+  signedInUser().also { if (it.email !in allowed) throw UnauthorizedException("No longer allowed: ${it.email}") }
 
 private fun HttpExchange.signedInUser() =
   session.user ?: redirect("/login" + header("X-Forwarded-Uri")?.let { "?redirect=" + it.urlEncode() }.orEmpty())

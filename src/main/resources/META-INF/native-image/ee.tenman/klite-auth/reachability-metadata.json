@@ -173,6 +173,17 @@
       ]
     },
     {
+      "type": "ee.tenman.auth.adapter.google.GoogleClient$Verification",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "boolean"
+          ]
+        }
+      ]
+    },
+    {
       "type": "ee.tenman.auth.domain.User",
       "methods": [
         {
